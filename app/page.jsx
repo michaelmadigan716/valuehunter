@@ -8,7 +8,7 @@ import { TrendingUp, Users, BarChart3, Target, Scale, Building2, ChevronDown, Ch
 // ============================================
 // When deploying externally, set USE_LIVE_API to true
 // Get your free API key at: https://financialmodelingprep.com/developer
-const USE_LIVE_API = false; // Set to true when deploying to Vercel/your server
+const USE_LIVE_API = true; // Set to true when deploying to Vercel/your server
 const FMP_API_KEY = 'WKtNGOXUwCRZ0xeEgfftPjMVoTVIpanQ';
 const API_BASE = 'https://financialmodelingprep.com/api';
 

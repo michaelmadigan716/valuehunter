@@ -1,308 +1,269 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { TrendingUp, Users, BarChart3, Target, Scale, Building2, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, Wallet, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown } from 'lucide-react';
+import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar } from 'lucide-react';
 
 // ============================================
-// POLYGON.IO API CONFIG
+// API CONFIGURATION
 // ============================================
 const POLYGON_KEY = 'clWwV5gBj4FG9f5o3M1IlMpp3p_p_vJS';
-const FINNHUB_KEY = 'd5e309hr01qjckl1horgd5e309hr01qjckl1hos0'; // Backup for additional data
+const FINNHUB_KEY = 'd5e309hr01qjckl1horgd5e309hr01qjckl1hos0';
 
-const CACHE_KEY = 'valuehunter_cache_v2';
+const CACHE_KEY = 'valuehunter_cache_v3';
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
 // Market cap range (in dollars for Polygon)
 const MIN_MARKET_CAP = 40_000_000;   // $40M
 const MAX_MARKET_CAP = 400_000_000;  // $400M
 
+const TEST_MODE_LIMIT = 100; // Max stocks to scan in test mode
+
 const discoveryAgents = [
   { id: 'polygonScreener', name: 'Polygon Screener', icon: Database, color: '#8B5CF6', coverage: 'All US stocks' },
   { id: 'marketCapFilter', name: 'Market Cap Filter', icon: DollarSign, color: '#3B82F6', coverage: '$40M - $400M' },
   { id: 'technicalScanner', name: 'Technical Scanner', icon: Activity, color: '#F59E0B', coverage: '52-week analysis' },
-  { id: 'momentumDetector', name: 'Momentum Detector', icon: TrendingUp, color: '#10B981', coverage: 'RSI & trends' },
-  { id: 'volumeAnalyzer', name: 'Volume Analyzer', icon: BarChart3, color: '#EC4899', coverage: 'Unusual activity' },
-  { id: 'pricePosition', name: 'Price Position', icon: Target, color: '#EF4444', coverage: 'Buy zone detection' },
+  { id: 'insiderScanner', name: 'Insider Scanner', icon: Users, color: '#10B981', coverage: 'SEC Form 4' },
+  { id: 'financialScanner', name: 'Financial Scanner', icon: Banknote, color: '#EC4899', coverage: 'Cash & Debt' },
+  { id: 'aiAnalyzer', name: 'AI Analyzer', icon: Sparkles, color: '#EF4444', coverage: 'Top 3 analysis' },
 ];
 
 const analysisAgents = [
-  { id: 'buySignal', name: 'Buy Signal', desc: 'Overall buy strength', icon: TrendingUp, color: '#10B981' },
   { id: 'pricePosition', name: 'Price Position', desc: '52-week range position', icon: Target, color: '#3B82F6' },
-  { id: 'technicalAnalysis', name: 'Technical Analysis', desc: 'RSI & moving averages', icon: LineChart, color: '#F59E0B' },
-  { id: 'debtAnalysis', name: 'Debt Analysis', desc: 'Debt % of market cap', icon: Scale, color: '#EF4444' },
-  { id: 'insiderBuying', name: 'Insider Activity', desc: 'Recent insider trades', icon: Users, color: '#8B5CF6' },
-  { id: 'volumeScore', name: 'Volume Score', desc: 'Relative volume', icon: BarChart3, color: '#EC4899' },
-  { id: 'moatStrength', name: 'Moat Strength', desc: 'Competitive advantage', icon: Building2, color: '#0EA5E9' },
-  { id: 'valueScore', name: 'Value Score', desc: 'Undervaluation signal', icon: DollarSign, color: '#14B8A6' },
+  { id: 'insiderActivity', name: 'Insider Activity', desc: 'Recent insider purchases', icon: Users, color: '#10B981' },
+  { id: 'netCash', name: 'Net Cash', desc: 'Cash minus debt', icon: Banknote, color: '#8B5CF6' },
 ];
 
 // ============================================
 // POLYGON API FUNCTIONS
 // ============================================
 
-// Get all stock tickers with market cap filter
-async function getFilteredTickers() {
+async function getFilteredTickers(testMode = false) {
   const tickers = [];
   let nextUrl = `https://api.polygon.io/v3/reference/tickers?market=stocks&active=true&limit=1000&apiKey=${POLYGON_KEY}`;
+  let pageCount = 0;
+  const maxPages = testMode ? 1 : 100; // Limit pages in test mode
   
-  while (nextUrl) {
+  while (nextUrl && pageCount < maxPages) {
     const res = await fetch(nextUrl);
     if (!res.ok) throw new Error(`Polygon API error: ${res.status}`);
     const data = await res.json();
     
     if (data.results) {
-      // Filter to common stocks on major exchanges
       const filtered = data.results.filter(t => 
         t.market === 'stocks' &&
-        t.type === 'CS' && // Common Stock
-        (t.primary_exchange === 'XNYS' || t.primary_exchange === 'XNAS') && // NYSE or NASDAQ
+        t.type === 'CS' &&
+        (t.primary_exchange === 'XNYS' || t.primary_exchange === 'XNAS') &&
         !t.ticker.includes('.') &&
         !t.ticker.includes('-')
       );
       tickers.push(...filtered);
+      
+      // In test mode, stop once we have enough
+      if (testMode && tickers.length >= TEST_MODE_LIMIT) {
+        return tickers.slice(0, TEST_MODE_LIMIT);
+      }
     }
     
     nextUrl = data.next_url ? `${data.next_url}&apiKey=${POLYGON_KEY}` : null;
-    
-    // Rate limiting - Polygon starter = 5 calls/min
+    pageCount++;
     await new Promise(r => setTimeout(r, 250));
   }
   
-  return tickers;
+  return testMode ? tickers.slice(0, TEST_MODE_LIMIT) : tickers;
 }
 
-// Get ticker details including market cap
 async function getTickerDetails(ticker) {
   try {
     const res = await fetch(`https://api.polygon.io/v3/reference/tickers/${ticker}?apiKey=${POLYGON_KEY}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.results || null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// Get previous day's data
 async function getPrevDay(ticker) {
   try {
     const res = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${POLYGON_KEY}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.results?.[0] || null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// Get 52-week data for technical analysis
 async function get52WeekData(ticker) {
   try {
     const endDate = new Date().toISOString().split('T')[0];
     const startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    
     const res = await fetch(
       `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=desc&limit=260&apiKey=${POLYGON_KEY}`
     );
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const data = await res.json();
     return data.results || [];
+  } catch (e) { return []; }
+}
+
+// Fetch financials for cash and debt
+async function getFinancials(ticker) {
+  try {
+    const res = await fetch(
+      `https://api.polygon.io/vX/reference/financials?ticker=${ticker}&limit=1&apiKey=${POLYGON_KEY}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = data.results?.[0];
+    if (results?.financials) {
+      const bs = results.financials.balance_sheet;
+      const cash = bs?.cash_and_cash_equivalents?.value || bs?.cash?.value || 0;
+      const debt = bs?.long_term_debt?.value || bs?.total_debt?.value || 0;
+      return { cash, debt, netCash: cash - debt };
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
+// Fetch insider transactions from Finnhub
+async function getInsiderTransactions(ticker) {
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/insider-transactions?symbol=${ticker}&token=${FINNHUB_KEY}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    
+    // Find the most recent purchase (acquisition)
+    const purchases = (data.data || []).filter(t => 
+      t.transactionType === 'P - Purchase' || 
+      t.acquisitionOrDisposition === 'A'
+    ).sort((a, b) => new Date(b.transactionDate) - new Date(a.transactionDate));
+    
+    if (purchases.length > 0) {
+      const latest = purchases[0];
+      return {
+        date: latest.transactionDate,
+        amount: latest.share * (latest.price || 0),
+        shares: latest.share,
+        price: latest.price,
+        name: latest.name,
+      };
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
+// AI Analysis using Claude API
+async function getAIAnalysis(stock) {
+  try {
+    const prompt = `Analyze this small-cap stock for a value investor. Be concise (3-4 sentences max).
+
+Stock: ${stock.ticker} (${stock.name})
+Price: $${stock.price?.toFixed(2)}
+Market Cap: $${stock.marketCap}M
+52-Week Low: $${stock.low52?.toFixed(2)} | High: $${stock.high52?.toFixed(2)}
+Current position: ${stock.fromLow?.toFixed(1)}% above 52-week low
+Net Cash Position: $${((stock.netCash || 0) / 1000000).toFixed(1)}M
+Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} for $${((stock.lastInsiderPurchase?.amount || 0) / 1000).toFixed(0)}K
+
+Give a brief investment thesis: Is this a potential buy? What are the key risks and opportunities?`;
+
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 300,
+        messages: [{ role: "user", content: prompt }],
+      })
+    });
+
+    const data = await response.json();
+    return data.content?.[0]?.text || null;
   } catch (e) {
-    return [];
+    console.error('AI analysis failed:', e);
+    return null;
   }
 }
 
-// Calculate RSI from price data
 function calculateRSI(prices, period = 14) {
   if (prices.length < period + 1) return 50;
-  
-  let gains = 0;
-  let losses = 0;
-  
+  let gains = 0, losses = 0;
   for (let i = 1; i <= period; i++) {
-    const change = prices[i - 1] - prices[i]; // prices are desc order
+    const change = prices[i - 1] - prices[i];
     if (change > 0) gains += change;
     else losses -= change;
   }
-  
   const avgGain = gains / period;
   const avgLoss = losses / period;
-  
   if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
-// Calculate moving average
-function calculateSMA(prices, period) {
-  if (prices.length < period) return null;
-  const sum = prices.slice(0, period).reduce((a, b) => a + b, 0);
-  return sum / period;
-}
-
-// Process stock with full technical analysis
-function processStock(ticker, details, prevDay, historicalData, idx) {
+function processStock(ticker, details, prevDay, historicalData, financials, insiderData, idx) {
   const currentPrice = prevDay?.c || 0;
   const prices = historicalData.map(d => d.c);
   
-  // 52-week high/low
   const high52 = Math.max(...prices);
   const low52 = Math.min(...prices);
   const range52 = high52 - low52;
-  
-  // Position in 52-week range (0% = at low, 100% = at high)
   const positionIn52Week = range52 > 0 ? ((currentPrice - low52) / range52) * 100 : 50;
-  
-  // How far from 52-week low (lower = better buy)
   const fromLow = low52 > 0 ? ((currentPrice - low52) / low52) * 100 : 0;
   
-  // RSI calculation
   const rsi = calculateRSI(prices);
-  
-  // Moving averages
-  const sma20 = calculateSMA(prices, 20);
-  const sma50 = calculateSMA(prices, 50);
-  const sma200 = calculateSMA(prices, 200);
-  
-  // Price vs moving averages
-  const vsMA50 = sma50 ? ((currentPrice - sma50) / sma50) * 100 : 0;
-  const vsMA200 = sma200 ? ((currentPrice - sma200) / sma200) * 100 : 0;
-  
-  // Volume analysis
-  const avgVolume = historicalData.slice(0, 20).reduce((a, d) => a + (d.v || 0), 0) / 20;
-  const currentVolume = prevDay?.v || 0;
-  const relativeVolume = avgVolume > 0 ? currentVolume / avgVolume : 1;
-  
-  // Daily change
   const change = prevDay?.o ? ((currentPrice - prevDay.o) / prevDay.o) * 100 : 0;
-  
-  // Market cap in millions
   const marketCapM = Math.round((details?.market_cap || 0) / 1_000_000);
   
-  // ============================================
-  // CALCULATE SCORES
-  // ============================================
+  // Net cash calculation
+  const netCash = financials?.netCash || 0;
+  const netCashM = netCash / 1_000_000;
   
-  // Buy Signal Score (0-100) - higher = stronger buy
-  let buySignal = 50;
-  
-  // Near 52-week low is bullish (within 20% of low = +30 points)
-  if (fromLow <= 10) buySignal += 30;
-  else if (fromLow <= 20) buySignal += 20;
-  else if (fromLow <= 30) buySignal += 10;
-  else if (fromLow >= 80) buySignal -= 20; // Near high = bearish
-  
-  // RSI oversold is bullish
-  if (rsi < 30) buySignal += 25;
-  else if (rsi < 40) buySignal += 15;
-  else if (rsi > 70) buySignal -= 15; // Overbought = bearish
-  
-  // Below 200-day MA can be value opportunity
-  if (vsMA200 < -20) buySignal += 15;
-  else if (vsMA200 < -10) buySignal += 10;
-  
-  // High relative volume shows interest
-  if (relativeVolume > 2) buySignal += 10;
-  
-  buySignal = Math.max(0, Math.min(100, buySignal));
-  
-  // Price Position Score (inverse - lower position = higher score)
+  // Score calculations
   const pricePositionScore = Math.max(0, Math.min(100, 100 - positionIn52Week));
   
-  // Technical Score
-  let techScore = 50;
-  if (rsi < 35) techScore += 25;
-  else if (rsi < 45) techScore += 10;
-  else if (rsi > 65) techScore -= 15;
-  
-  if (vsMA50 < 0 && vsMA200 < 0) techScore += 15; // Below both MAs = potential bottom
-  if (currentPrice > sma20 && sma20 > sma50) techScore += 10; // Uptrend starting
-  
-  techScore = Math.max(0, Math.min(100, techScore));
-  
-  // Volume Score
-  const volumeScore = Math.min(100, 40 + (relativeVolume * 20));
-  
-  // Simulated scores (would need additional APIs for real data)
-  const seed = ticker.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const seededRandom = (offset) => ((seed + offset) % 60) / 100 + 0.2;
-  
-  const debtScore = 30 + seededRandom(1) * 70;
-  const insiderScore = 30 + seededRandom(2) * 50;
-  const moatScore = 30 + seededRandom(3) * 50;
-  const valueScore = pricePositionScore * 0.6 + (rsi < 50 ? 30 : 10);
-  
-  // Determine trade horizon
-  let horizon = 'longterm';
-  let horizonReason = { day: '', swing: '', longterm: '' };
-  
-  if (rsi < 30 && relativeVolume > 1.5) {
-    horizon = 'day';
-    horizonReason.day = 'Oversold with high volume';
-  } else if (rsi < 40 && fromLow < 25) {
-    horizon = 'swing';
-    horizonReason.swing = 'Near 52-week low, oversold';
-  } else {
-    horizonReason.longterm = fromLow < 30 ? 'Value accumulation zone' : 'Hold for trend reversal';
+  // Insider score based on recency
+  let insiderScore = 30;
+  if (insiderData?.date) {
+    const daysSincePurchase = Math.floor((Date.now() - new Date(insiderData.date)) / (1000 * 60 * 60 * 24));
+    if (daysSincePurchase < 30) insiderScore = 90;
+    else if (daysSincePurchase < 90) insiderScore = 70;
+    else if (daysSincePurchase < 180) insiderScore = 50;
   }
   
-  // Pattern detection
-  let pattern = 'Consolidation';
-  if (rsi < 30) pattern = 'Oversold';
-  else if (rsi > 70) pattern = 'Overbought';
-  else if (change > 3) pattern = 'Momentum';
-  else if (change < -3) pattern = 'Pullback';
-  else if (currentPrice > sma50 && sma50 > sma200) pattern = 'Uptrend';
-  else if (currentPrice < sma50 && sma50 < sma200) pattern = 'Downtrend';
+  // Net cash score
+  const netCashScore = netCash > 0 ? Math.min(100, 50 + (netCashM / marketCapM) * 100) : Math.max(0, 50 + (netCashM / marketCapM) * 50);
   
   return {
     id: idx + 1,
-    ticker: ticker,
+    ticker,
     name: details?.name || ticker,
     sector: details?.sic_description || 'Unknown',
-    industry: details?.sic_description || 'Unknown',
     price: currentPrice,
     marketCap: marketCapM,
-    change: change,
+    change,
+    high52, low52, positionIn52Week, fromLow, rsi,
     
-    // Technical data
-    high52: high52,
-    low52: low52,
-    positionIn52Week: positionIn52Week,
-    fromLow: fromLow,
-    rsi: Math.round(rsi),
-    sma50: sma50,
-    sma200: sma200,
-    vsMA50: vsMA50,
-    vsMA200: vsMA200,
-    relativeVolume: relativeVolume,
+    // Financial data
+    cash: financials?.cash || 0,
+    debt: financials?.debt || 0,
+    netCash,
+    netCashM,
+    
+    // Insider data
+    lastInsiderPurchase: insiderData,
     
     agentScores: {
-      buySignal: buySignal,
       pricePosition: pricePositionScore,
-      technicalAnalysis: techScore,
-      debtAnalysis: debtScore,
-      insiderBuying: insiderScore,
-      volumeScore: volumeScore,
-      moatStrength: moatScore,
-      valueScore: valueScore,
+      insiderActivity: insiderScore,
+      netCash: netCashScore,
     },
     compositeScore: 0,
-    
-    insiderData: { recentBuys: Math.floor(seededRandom(4) * 5), portfolioPercent: 15 + Math.floor(seededRandom(5) * 30) },
-    technicalData: { pattern, rsi: Math.round(rsi), undervalued: fromLow < 25 && rsi < 45 },
-    fundamentalData: { debtPercent: 100 - debtScore },
-    
-    idealHorizon: horizon,
-    horizonReason: horizonReason,
+    aiAnalysis: null, // Will be populated for top stocks
   };
 }
 
 // Cache functions
 function saveToCache(stocks, scanStats) {
   try {
-    const cache = { timestamp: Date.now(), stocks, scanStats };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stocks, scanStats }));
   } catch (e) { console.warn('Cache save failed:', e); }
 }
 
@@ -328,8 +289,20 @@ function formatCacheAge(ms) {
   if (!ms) return '';
   const hours = Math.floor(ms / (1000 * 60 * 60));
   const mins = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-  if (hours > 0) return `${hours}h ${mins}m ago`;
-  return `${mins}m ago`;
+  return hours > 0 ? `${hours}h ${mins}m ago` : `${mins}m ago`;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return 'N/A';
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatMoney(amount) {
+  if (!amount && amount !== 0) return 'N/A';
+  if (Math.abs(amount) >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`;
+  if (Math.abs(amount) >= 1000) return `$${(amount / 1000).toFixed(0)}K`;
+  return `$${amount.toFixed(0)}`;
 }
 
 // ============================================
@@ -339,14 +312,9 @@ function formatCacheAge(ms) {
 export default function StockResearchApp() {
   const [stocks, setStocks] = useState([]);
   const [weights, setWeights] = useState({
-    buySignal: 80,
-    pricePosition: 70,
-    technicalAnalysis: 60,
-    debtAnalysis: 40,
-    insiderBuying: 50,
-    volumeScore: 40,
-    moatStrength: 30,
-    valueScore: 60,
+    pricePosition: 40,
+    insiderActivity: 40,
+    netCash: 20,
   });
   const [selected, setSelected] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -354,21 +322,14 @@ export default function StockResearchApp() {
   const [showDiscovery, setShowDiscovery] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
-  const [sortBy, setSortBy] = useState('buySignal');
+  const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
-  const [horizonFilter, setHorizonFilter] = useState('all');
   const [lastUpdate, setLastUpdate] = useState(null);
   const [status, setStatus] = useState({ type: 'ready', msg: 'Loading...' });
   const [error, setError] = useState(null);
   const [scanProgress, setScanProgress] = useState({ phase: '', current: 0, total: 0, found: 0 });
   const [cacheAge, setCacheAge] = useState(null);
-
-  const horizonOpts = [
-    { id: 'all', label: 'All', icon: '◎' },
-    { id: 'day', label: '1 Day', icon: '⚡' },
-    { id: 'swing', label: '6 Week', icon: '〰️' },
-    { id: 'longterm', label: '1 Year', icon: '📈' },
-  ];
+  const [testMode, setTestMode] = useState(true); // Default to test mode
 
   const calcScores = useCallback((list, w) => {
     const total = Object.values(w).reduce((a, b) => a + b, 0);
@@ -383,7 +344,6 @@ export default function StockResearchApp() {
     }).sort((a, b) => b.compositeScore - a.compositeScore);
   }, []);
 
-  // Load cache on mount
   useEffect(() => {
     const cached = loadFromCache();
     if (cached && cached.stocks?.length > 0) {
@@ -398,7 +358,6 @@ export default function StockResearchApp() {
     }
   }, []);
 
-  // Update cache age periodically
   useEffect(() => {
     const interval = setInterval(() => setCacheAge(getCacheAge()), 60000);
     return () => clearInterval(interval);
@@ -424,24 +383,22 @@ export default function StockResearchApp() {
     const startTime = Date.now();
 
     try {
-      // Phase 1: Get all tickers
-      setStatus({ type: 'loading', msg: 'Fetching stock list from Polygon...' });
+      // Phase 1: Get tickers
+      setStatus({ type: 'loading', msg: testMode ? 'Test Mode: Fetching limited stock list...' : 'Fetching stock list...' });
       setScanProgress({ phase: 'Loading tickers...', current: 0, total: 0, found: 0 });
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'running' }));
       
-      const allTickers = await getFilteredTickers();
+      const allTickers = await getFilteredTickers(testMode);
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'complete', marketCapFilter: 'running' }));
       
       setScanProgress({ phase: 'Filtering by market cap...', current: 0, total: allTickers.length, found: 0 });
       setStatus({ type: 'loading', msg: `Checking ${allTickers.length} stocks...` });
 
-      // Phase 2: Check market cap for each ticker
+      // Phase 2: Filter by market cap
       const qualifiedTickers = [];
       
       for (let i = 0; i < allTickers.length; i++) {
         const t = allTickers[i];
-        
-        // Get ticker details for market cap
         const details = await getTickerDetails(t.ticker);
         
         if (details?.market_cap && details.market_cap >= MIN_MARKET_CAP && details.market_cap <= MAX_MARKET_CAP) {
@@ -451,18 +408,17 @@ export default function StockResearchApp() {
         
         setScanProgress(p => ({ ...p, current: i + 1 }));
         
-        if (i % 50 === 0) {
+        if (i % 20 === 0) {
           setStatus({ type: 'loading', msg: `Filtering... ${i}/${allTickers.length} (${qualifiedTickers.length} found)` });
         }
         
-        // Rate limiting (5 calls/min = 12 sec between calls, but we can batch)
         await new Promise(r => setTimeout(r, 250));
       }
 
-      setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running' }));
+      setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running', insiderScanner: 'running', financialScanner: 'running' }));
       
-      // Phase 3: Get detailed data for qualified stocks
-      setScanProgress({ phase: 'Analyzing technicals...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
+      // Phase 3: Get detailed data
+      setScanProgress({ phase: 'Analyzing stocks...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
       setStatus({ type: 'loading', msg: `Analyzing ${qualifiedTickers.length} small-caps...` });
       
       const processedStocks = [];
@@ -470,54 +426,64 @@ export default function StockResearchApp() {
       for (let i = 0; i < qualifiedTickers.length; i++) {
         const { ticker, details } = qualifiedTickers[i];
         
-        // Get price and historical data
-        const [prevDay, historicalData] = await Promise.all([
+        const [prevDay, historicalData, financials, insiderData] = await Promise.all([
           getPrevDay(ticker),
           get52WeekData(ticker),
+          getFinancials(ticker),
+          getInsiderTransactions(ticker),
         ]);
         
         if (prevDay && historicalData.length > 50) {
-          const processed = processStock(ticker, details, prevDay, historicalData, processedStocks.length);
+          const processed = processStock(ticker, details, prevDay, historicalData, financials, insiderData, processedStocks.length);
           processedStocks.push(processed);
-          
-          // Update UI with new stock
           setStocks(calcScores([...processedStocks], weights));
         }
         
         setScanProgress(p => ({ ...p, current: i + 1, phase: `Analyzing ${ticker}...` }));
         
-        if (i % 10 === 0) {
+        if (i % 5 === 0) {
           const elapsed = Math.round((Date.now() - startTime) / 1000);
           setStatus({ type: 'loading', msg: `${processedStocks.length} analyzed (${elapsed}s)` });
         }
         
-        // Rate limiting
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 500));
       }
 
-      // Finish up
-      setDiscoveryStatus(p => ({ 
-        ...p, 
-        technicalScanner: 'complete',
-        momentumDetector: 'complete',
-        volumeAnalyzer: 'complete',
-        pricePosition: 'complete'
-      }));
+      setDiscoveryStatus(p => ({ ...p, technicalScanner: 'complete', insiderScanner: 'complete', financialScanner: 'complete', aiAnalyzer: 'running' }));
+      
+      // Phase 4: AI Analysis for top 3
+      setStatus({ type: 'loading', msg: 'Running AI analysis on top stocks...' });
+      setScanProgress(p => ({ ...p, phase: 'AI analyzing top stocks...' }));
+      
+      const scoredStocks = calcScores(processedStocks, weights);
+      const top3 = scoredStocks.slice(0, 3);
+      
+      for (let i = 0; i < top3.length; i++) {
+        const analysis = await getAIAnalysis(top3[i]);
+        if (analysis) {
+          const stockIndex = scoredStocks.findIndex(s => s.ticker === top3[i].ticker);
+          if (stockIndex !== -1) {
+            scoredStocks[stockIndex] = { ...scoredStocks[stockIndex], aiAnalysis: analysis };
+          }
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      
+      setDiscoveryStatus(p => ({ ...p, aiAnalyzer: 'complete' }));
       
       for (const a of analysisAgents) {
         setAnalysisStatus(p => ({ ...p, [a.id]: 'complete' }));
       }
 
-      const finalStocks = calcScores(processedStocks, weights);
-      const scanStats = { phase: 'complete', current: allTickers.length, total: allTickers.length, found: processedStocks.length };
+      const scanStats = { phase: 'complete', current: allTickers.length, total: allTickers.length, found: scoredStocks.length };
       
-      saveToCache(finalStocks, scanStats);
-      setStocks(finalStocks);
+      saveToCache(scoredStocks, scanStats);
+      setStocks(scoredStocks);
       setLastUpdate(new Date());
       setCacheAge(0);
       
       const totalTime = Math.round((Date.now() - startTime) / 1000);
-      setStatus({ type: 'live', msg: `${processedStocks.length} small-caps found (${totalTime}s)` });
+      setStatus({ type: 'live', msg: `${scoredStocks.length} small-caps found (${totalTime}s)` });
       setScanProgress(scanStats);
 
     } catch (err) {
@@ -541,9 +507,9 @@ export default function StockResearchApp() {
 
   const sorted = [...stocks]
     .filter(s => sectorFilter === 'all' || s.sector === sectorFilter)
-    .filter(s => horizonFilter === 'all' || s.idealHorizon === horizonFilter)
     .sort((a, b) => {
       if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
+      if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
@@ -555,36 +521,32 @@ export default function StockResearchApp() {
     return <Clock className="w-4 h-4 text-slate-500" />;
   };
 
-  const BuySignalBadge = ({ score }) => {
-    const c = score >= 70 ? ['rgba(16,185,129,0.2)', '#34d399', 'Strong Buy'] 
-            : score >= 55 ? ['rgba(16,185,129,0.15)', '#6ee7b7', 'Buy'] 
-            : score >= 45 ? ['rgba(245,158,11,0.2)', '#fbbf24', 'Hold']
-            : ['rgba(239,68,68,0.2)', '#f87171', 'Weak'];
-    return <div className="px-2 py-1 rounded-lg text-xs font-medium" style={{ background: c[0], color: c[1] }}>{c[2]}</div>;
-  };
-
-  const PricePositionBadge = ({ position, fromLow }) => {
-    const c = fromLow <= 15 ? ['rgba(16,185,129,0.2)', '#34d399'] 
-            : fromLow <= 30 ? ['rgba(16,185,129,0.15)', '#6ee7b7']
-            : fromLow <= 50 ? ['rgba(245,158,11,0.2)', '#fbbf24']
-            : ['rgba(239,68,68,0.2)', '#f87171'];
+  const NetCashBadge = ({ amount }) => {
+    const isPositive = amount >= 0;
     return (
-      <div className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: c[0], color: c[1] }}>
-        <TrendingDown className="w-3 h-3" />
-        <span style={{ fontFamily: 'monospace' }}>{fromLow.toFixed(0)}%</span>
-        <span className="text-[10px] opacity-75">from low</span>
+      <div className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1" 
+           style={{ background: isPositive ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: isPositive ? '#34d399' : '#f87171' }}>
+        <Banknote className="w-3 h-3" />
+        <span style={{ fontFamily: 'monospace' }}>{formatMoney(amount)}</span>
       </div>
     );
   };
 
-  const HorizonBadge = ({ h }) => {
-    const cfg = { 
-      day: ['rgba(239,68,68,0.15)', '#f87171', '⚡', '1D'], 
-      swing: ['rgba(245,158,11,0.15)', '#fbbf24', '〰️', '6W'], 
-      longterm: ['rgba(16,185,129,0.15)', '#34d399', '📈', '1Y'] 
-    };
-    const c = cfg[h] || cfg.longterm;
-    return <div className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: c[0], color: c[1] }}><span>{c[2]}</span><span>{c[3]}</span></div>;
+  const InsiderBadge = ({ data }) => {
+    if (!data?.date) {
+      return <span className="text-xs text-slate-500">No recent</span>;
+    }
+    const daysSince = Math.floor((Date.now() - new Date(data.date)) / (1000 * 60 * 60 * 24));
+    const isRecent = daysSince < 90;
+    return (
+      <div className="text-xs">
+        <div className="flex items-center gap-1" style={{ color: isRecent ? '#34d399' : '#94a3b8' }}>
+          <Calendar className="w-3 h-3" />
+          <span>{formatDate(data.date)}</span>
+        </div>
+        <div className="text-slate-400">{formatMoney(data.amount)}</div>
+      </div>
+    );
   };
 
   const progressPct = scanProgress.total > 0 ? (scanProgress.current / scanProgress.total) * 100 : 0;
@@ -599,18 +561,10 @@ export default function StockResearchApp() {
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}><Network className="w-6 h-6 text-white" /></div>
             <div>
               <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #818cf8, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ValueHunter</span><span className="text-slate-400 font-normal ml-2 text-lg">AI</span></h1>
-              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M • Buy Signal Analysis</p>
+              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M {testMode && <span className="text-amber-400">• TEST MODE</span>}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex rounded-xl border overflow-hidden" style={{ background: 'rgba(15,23,42,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>
-              {horizonOpts.map(o => (
-                <button key={o.id} onClick={() => setHorizonFilter(o.id)} className="px-3 py-2 text-xs font-medium flex items-center gap-1"
-                  style={{ background: horizonFilter === o.id ? 'rgba(99,102,241,0.2)' : 'transparent', color: horizonFilter === o.id ? '#a5b4fc' : '#64748b' }}>
-                  <span>{o.icon}</span><span>{o.label}</span>
-                </button>
-              ))}
-            </div>
             <div className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border" style={{ 
               background: status.type === 'live' ? 'rgba(16,185,129,0.1)' : status.type === 'cached' ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.1)', 
               borderColor: status.type === 'live' ? 'rgba(16,185,129,0.3)' : 'rgba(99,102,241,0.3)', 
@@ -680,9 +634,9 @@ export default function StockResearchApp() {
           <div className="mb-6 card rounded-2xl border border-slate-800/50 p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold flex items-center gap-2"><Sliders className="w-5 h-5 text-amber-400" />Scoring Weights</h2>
-              <button onClick={() => setWeights({ buySignal: 80, pricePosition: 70, technicalAnalysis: 60, debtAnalysis: 40, insiderBuying: 50, volumeScore: 40, moatStrength: 30, valueScore: 60 })} className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>Reset</button>
+              <button onClick={() => setWeights({ pricePosition: 40, insiderActivity: 40, netCash: 20 })} className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>Reset</button>
             </div>
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               {analysisAgents.map(a => (
                 <div key={a.id} className="rounded-xl p-4 border" style={{ background: 'rgba(15,23,42,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>
                   <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${a.color}20` }}><a.icon className="w-4 h-4" style={{ color: a.color }} /></div><span className="text-sm font-medium text-slate-200">{a.name}</span></div>
@@ -706,14 +660,9 @@ export default function StockResearchApp() {
                 ))}
               </div>
               
-              <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
-                <h3 className="text-sm font-semibold text-emerald-400 mb-2">Buy Signal Guide</h3>
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between"><span className="text-slate-400">70+ Strong Buy</span><span className="text-emerald-400">●</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">55-70 Buy</span><span className="text-emerald-300">●</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">45-55 Hold</span><span className="text-amber-400">●</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">&lt;45 Weak</span><span className="text-red-400">●</span></div>
-                </div>
+              <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
+                <h3 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />AI Analysis</h3>
+                <p className="text-xs text-slate-400">Top 3 ranked stocks receive an AI-powered investment analysis.</p>
               </div>
             </div>
           </div>
@@ -724,54 +673,75 @@ export default function StockResearchApp() {
                 <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
                 <div className="flex gap-3">
                   <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}><option value="all">All Sectors</option>{sectors.map(s => <option key={s} value={s}>{s}</option>)}</select>
-                  <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}><option value="compositeScore">Composite</option><option value="buySignal">Buy Signal</option><option value="pricePosition">Price Position</option>{analysisAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                  <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
+                    <option value="compositeScore">Composite</option>
+                    <option value="pricePosition">Price Position</option>
+                    <option value="insiderActivity">Insider Activity</option>
+                    <option value="netCash">Net Cash</option>
+                  </select>
                 </div>
               </div>
               <div className="divide-y divide-slate-800/30 max-h-[calc(100vh-300px)] overflow-y-auto">
                 {sorted.length === 0 && !isScanning ? (
-                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p><p className="text-xs text-slate-600 mt-2">Powered by Polygon.io • Real technical analysis • 24h cache</p></div>
+                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p><p className="text-xs text-slate-600 mt-2">{testMode ? 'Test Mode: Limited to 100 stocks' : 'Full scan mode'}</p></div>
                 ) : sorted.map((s, i) => (
                   <div key={s.ticker} className="row cursor-pointer" onClick={() => setSelected(selected?.ticker === s.ticker ? null : s)}>
                     <div className="p-4">
                       <div className="flex items-center gap-4">
                         <div className="w-10 h-10 rounded-xl flex items-center justify-center mono font-bold text-sm" style={{ background: i < 3 ? ['rgba(245,158,11,0.2)', 'rgba(148,163,184,0.2)', 'rgba(194,65,12,0.2)'][i] : 'rgba(30,41,59,0.5)', color: i < 3 ? ['#fbbf24', '#cbd5e1', '#fb923c'][i] : '#64748b' }}>#{i + 1}</div>
-                        <div className="flex-1 min-w-0"><div className="flex items-center gap-2"><span className="mono font-bold text-lg text-slate-100">{s.ticker}</span><span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span></div><p className="text-xs text-slate-500 truncate">{s.name}</p></div>
-                        <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-24"><BuySignalBadge score={s.agentScores.buySignal} /></div>
-                        <div className="w-28"><PricePositionBadge position={s.positionIn52Week} fromLow={s.fromLow} /></div>
-                        <div className="w-20"><HorizonBadge h={s.idealHorizon} /></div>
-                        <div className="w-32"><div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-400">Score</span><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
+                            {i < 3 && s.aiAnalysis && <Sparkles className="w-4 h-4 text-violet-400" />}
+                          </div>
+                          <p className="text-xs text-slate-500 truncate">{s.name}</p>
+                        </div>
+                        <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
+                        <div className="w-24"><NetCashBadge amount={s.netCash} /></div>
+                        <div className="w-32"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        <div className="w-24">
+                          <div className="text-xs text-slate-400">From 52w Low</div>
+                          <div className="mono text-sm font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
+                        </div>
+                        <div className="w-28"><div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-400">Score</span><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
                         <div className="w-8">{selected?.ticker === s.ticker ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
                       </div>
+                      
                       {selected?.ticker === s.ticker && (
-                        <div className="mt-4 pt-4 border-t border-slate-800/30 grid grid-cols-4 gap-4">
-                          <div className="col-span-2 grid grid-cols-2 gap-2">
-                            {analysisAgents.map(a => (
-                              <div key={a.id} className="rounded-lg p-2 border" style={{ background: 'rgba(15,23,42,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>
-                                <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-300">{a.name}</span><span className="mono text-sm font-bold" style={{ color: a.color }}>{s.agentScores[a.id].toFixed(1)}</span></div>
-                                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.agentScores[a.id]}%`, background: a.color }} /></div>
-                              </div>
-                            ))}
-                          </div>
-                          <div className="space-y-2">
+                        <div className="mt-4 pt-4 border-t border-slate-800/30">
+                          {s.aiAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
+                              <h4 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />AI Analysis</h4>
+                              <p className="text-sm text-slate-300 leading-relaxed">{s.aiAnalysis}</p>
+                            </div>
+                          )}
+                          <div className="grid grid-cols-4 gap-4">
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
                               <p className="text-xs text-emerald-400">52-Week Range</p>
                               <p className="text-lg font-bold text-slate-200">${s.low52?.toFixed(2)} - ${s.high52?.toFixed(2)}</p>
                               <p className="text-[10px] text-slate-500">{s.fromLow?.toFixed(1)}% from low</p>
                             </div>
+                            <div className="rounded-lg p-3 border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
+                              <p className="text-xs text-violet-400">Net Cash Position</p>
+                              <p className="text-lg font-bold" style={{ color: s.netCash >= 0 ? '#34d399' : '#f87171' }}>{formatMoney(s.netCash)}</p>
+                              <p className="text-[10px] text-slate-500">Cash: {formatMoney(s.cash)} | Debt: {formatMoney(s.debt)}</p>
+                            </div>
+                            <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
+                              <p className="text-xs text-emerald-400">Last Insider Purchase</p>
+                              {s.lastInsiderPurchase ? (
+                                <>
+                                  <p className="text-lg font-bold text-slate-200">{formatMoney(s.lastInsiderPurchase.amount)}</p>
+                                  <p className="text-[10px] text-slate-500">{formatDate(s.lastInsiderPurchase.date)} • {s.lastInsiderPurchase.shares?.toLocaleString()} shares</p>
+                                </>
+                              ) : (
+                                <p className="text-slate-500">No recent purchases</p>
+                              )}
+                            </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
                               <p className="text-xs text-amber-400">RSI ({s.rsi})</p>
                               <p className="font-semibold text-slate-200">{s.rsi < 30 ? 'Oversold' : s.rsi > 70 ? 'Overbought' : 'Neutral'}</p>
-                            </div>
-                          </div>
-                          <div className="space-y-2">
-                            <div className="rounded-lg p-3 border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
-                              <p className="text-xs text-indigo-400">vs 50-Day MA</p>
-                              <p className="text-lg font-bold" style={{ color: s.vsMA50 < 0 ? '#34d399' : '#f87171' }}>{s.vsMA50 >= 0 ? '+' : ''}{s.vsMA50?.toFixed(1)}%</p>
-                            </div>
-                            <div className="rounded-lg p-3 border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
-                              <p className="text-xs text-violet-400">vs 200-Day MA</p>
-                              <p className="text-lg font-bold" style={{ color: s.vsMA200 < 0 ? '#34d399' : '#f87171' }}>{s.vsMA200 >= 0 ? '+' : ''}{s.vsMA200?.toFixed(1)}%</p>
+                              <p className="text-[10px] text-slate-500">14-day RSI indicator</p>
                             </div>
                           </div>
                         </div>
@@ -783,7 +753,23 @@ export default function StockResearchApp() {
             </div>
           </div>
         </div>
-        <footer className="mt-8 text-center text-xs text-slate-600 pb-8"><p>ValueHunter AI • Powered by Polygon.io • Real Technical Analysis</p></footer>
+        
+        {/* Footer with Test Mode Toggle */}
+        <footer className="mt-8 pb-8 flex items-center justify-between">
+          <p className="text-xs text-slate-600">ValueHunter AI • Powered by Polygon.io & Finnhub</p>
+          <button 
+            onClick={() => setTestMode(!testMode)} 
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all"
+            style={{ 
+              background: testMode ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', 
+              borderColor: testMode ? 'rgba(245,158,11,0.3)' : 'rgba(51,65,85,0.5)', 
+              color: testMode ? '#fcd34d' : '#64748b' 
+            }}
+          >
+            <Beaker className="w-4 h-4" />
+            {testMode ? 'Test Mode ON (100 stocks)' : 'Test Mode OFF (Full Scan)'}
+          </button>
+        </footer>
       </div>
     </div>
   );

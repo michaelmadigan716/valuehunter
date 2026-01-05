@@ -1,4 +1,3 @@
-cat > /mnt/user-data/outputs/page.jsx << 'ENDOFFILE'
 'use client';
 
 import React, { useState, useEffect } from 'react';

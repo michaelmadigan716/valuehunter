@@ -25,7 +25,7 @@ export async function POST(request) {
             content: prompt 
           }
         ],
-        max_tokens: 500,
+        max_tokens: 600,
         temperature: 0.7
       })
     });
@@ -42,18 +42,18 @@ export async function POST(request) {
     // Clean up markdown formatting (remove ** and other markdown)
     text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '');
     
-    // Extract 2x likelihood percentage
-    let doubleChance = null;
-    const match = text.match(/2X_LIKELIHOOD:\s*(\d+)/i);
+    // Extract upside percentage
+    let upsidePct = null;
+    const match = text.match(/UPSIDE_PCT:\s*([+-]?\d+)/i);
     if (match) {
-      doubleChance = parseInt(match[1]);
+      upsidePct = parseInt(match[1]);
       // Remove the tag from displayed text
-      text = text.replace(/2X_LIKELIHOOD:\s*\d+%?/i, '').trim();
+      text = text.replace(/UPSIDE_PCT:\s*[+-]?\d+%?/i, '').trim();
     }
     
     return Response.json({ 
       analysis: text || 'No response from AI',
-      doubleChance: doubleChance
+      upsidePct: upsidePct
     });
     
   } catch (error) {

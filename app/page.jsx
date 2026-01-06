@@ -232,25 +232,26 @@ async function getAIAnalysis(stock) {
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
-    const prompt = `Analyze this small-cap stock for a value investor. Write in plain text without any markdown, asterisks, or special formatting.
+    const prompt = `You are a stock research analyst. For the stock ${stock.ticker} (${stock.name}), I need you to:
 
-Stock: ${stock.ticker} (${stock.name})
-Price: $${stock.price?.toFixed(2)}
-Market Cap: $${stock.marketCap}M
-52-Week Low: $${stock.low52?.toFixed(2)} | High: $${stock.high52?.toFixed(2)}
-Currently: ${stock.fromLow?.toFixed(1)}% above 52-week low
-Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'N/A'}
-Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} ${stock.lastInsiderPurchase?.amount ? '($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : ''}
+1. Search recent Stocktwits posts and social sentiment about ${stock.ticker}. Look for any hidden value, upcoming catalysts, news, or insider discussions that retail investors are talking about.
 
-Provide in 3-4 plain sentences:
-1) Investment thesis
-2) Main risk
-3) Worth researching further?
+2. Find analyst price targets from reputable firms (Wall Street analysts, investment banks) for ${stock.ticker}. Calculate the average price target and the percentage upside/downside from the current price of $${stock.price?.toFixed(2)}.
 
-At the very end of your response, on a new line, write exactly this format with your estimated probability (0-100) that this stock could double in price within 2 years:
-2X_LIKELIHOOD: [number]`;
+Current Stock Info:
+- Price: $${stock.price?.toFixed(2)}
+- Market Cap: $${stock.marketCap}M
+- 52-Week Range: $${stock.low52?.toFixed(2)} - $${stock.high52?.toFixed(2)}
 
-    // Use local API route to avoid CORS issues
+Write in plain text without markdown or asterisks. Provide:
+1) Key themes/catalysts from Stocktwits discussions (2-3 sentences)
+2) Any notable news or upcoming events mentioned
+3) Analyst consensus and average price target
+
+At the very end, on a new line, write exactly:
+UPSIDE_PCT: [number]
+where [number] is the percentage upside to average analyst price target (negative if downside). If no analyst targets found, estimate based on sentiment.`;
+
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { 
@@ -264,7 +265,7 @@ At the very end of your response, on a new line, write exactly this format with 
     if (!response.ok) {
       const errorData = await response.json();
       console.error(`Grok API error:`, errorData);
-      return { analysis: `API Error: ${errorData.error || response.status}`, doubleChance: null };
+      return { analysis: `API Error: ${errorData.error || response.status}`, upsidePct: null };
     }
 
     const data = await response.json();
@@ -273,14 +274,14 @@ At the very end of your response, on a new line, write exactly this format with 
       console.log(`Grok analysis complete for ${stock.ticker}`);
       return { 
         analysis: data.analysis, 
-        doubleChance: data.doubleChance 
+        upsidePct: data.upsidePct 
       };
     }
     
-    return { analysis: data.error || 'No response from AI', doubleChance: null };
+    return { analysis: data.error || 'No response from AI', upsidePct: null };
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return { analysis: `Error: ${e.message}`, doubleChance: null };
+    return { analysis: `Error: ${e.message}`, upsidePct: null };
   }
 }
 
@@ -493,7 +494,7 @@ export default function StockResearchApp() {
         s.ticker === top10[i].ticker ? { 
           ...s, 
           aiAnalysis: result.analysis,
-          doubleChance: result.doubleChance 
+          upsidePct: result.upsidePct 
         } : s
       );
       setStocks(updatedStocks);
@@ -871,7 +872,7 @@ export default function StockResearchApp() {
                     Last Insider Buy
                     {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-20 text-center">2x Chance</div>
+                  <div className="w-20 text-center">Upside %</div>
                   <div className="w-24 text-center">From 52w Low</div>
                   <div 
                     className="w-28 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -904,15 +905,15 @@ export default function StockResearchApp() {
                         <div className="w-28 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
                         <div className="w-36 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
                         <div className="w-20 text-center">
-                          {s.doubleChance !== null && s.doubleChance !== undefined ? (
+                          {s.upsidePct !== null && s.upsidePct !== undefined ? (
                             <span 
                               className="text-sm font-bold mono px-2 py-1 rounded-lg"
                               style={{ 
-                                background: s.doubleChance >= 60 ? 'rgba(16,185,129,0.2)' : s.doubleChance >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
-                                color: s.doubleChance >= 60 ? '#34d399' : s.doubleChance >= 40 ? '#fbbf24' : '#f87171'
+                                background: s.upsidePct >= 30 ? 'rgba(16,185,129,0.2)' : s.upsidePct >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.upsidePct >= 30 ? '#34d399' : s.upsidePct >= 0 ? '#fbbf24' : '#f87171'
                               }}
                             >
-                              {s.doubleChance}%
+                              {s.upsidePct > 0 ? '+' : ''}{s.upsidePct}%
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>

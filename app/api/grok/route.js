@@ -18,14 +18,14 @@ export async function POST(request) {
         "Authorization": `Bearer ${GROK_KEY}`
       },
       body: JSON.stringify({
-        model: "grok-3-latest",
+        model: "grok-2-latest",
         messages: [
           { 
             role: "user", 
             content: prompt 
           }
         ],
-        max_tokens: 400,
+        max_tokens: 500,
         temperature: 0.7
       })
     });
@@ -33,13 +33,28 @@ export async function POST(request) {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Grok API error:', response.status, errorText);
-      return Response.json({ error: `Grok API error: ${response.status}` }, { status: response.status });
+      return Response.json({ error: `Grok API error: ${response.status} ${errorText}` }, { status: response.status });
     }
 
     const data = await response.json();
-    const text = data.choices?.[0]?.message?.content;
+    let text = data.choices?.[0]?.message?.content || '';
     
-    return Response.json({ analysis: text || 'No response from AI' });
+    // Clean up markdown formatting (remove ** and other markdown)
+    text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '');
+    
+    // Extract 2x likelihood percentage
+    let doubleChance = null;
+    const match = text.match(/2X_LIKELIHOOD:\s*(\d+)/i);
+    if (match) {
+      doubleChance = parseInt(match[1]);
+      // Remove the tag from displayed text
+      text = text.replace(/2X_LIKELIHOOD:\s*\d+%?/i, '').trim();
+    }
+    
+    return Response.json({ 
+      analysis: text || 'No response from AI',
+      doubleChance: doubleChance
+    });
     
   } catch (error) {
     console.error('Grok route error:', error);

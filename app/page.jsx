@@ -232,7 +232,7 @@ async function getAIAnalysis(stock) {
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
-    const prompt = `Analyze this small-cap stock for a value investor. Be concise (3-4 sentences).
+    const prompt = `Analyze this small-cap stock for a value investor. Write in plain text without any markdown, asterisks, or special formatting.
 
 Stock: ${stock.ticker} (${stock.name})
 Price: $${stock.price?.toFixed(2)}
@@ -242,7 +242,13 @@ Currently: ${stock.fromLow?.toFixed(1)}% above 52-week low
 Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'N/A'}
 Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} ${stock.lastInsiderPurchase?.amount ? '($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : ''}
 
-Provide: 1) Investment thesis 2) Main risk 3) Worth researching? (Yes/No)`;
+Provide in 3-4 plain sentences:
+1) Investment thesis
+2) Main risk
+3) Worth researching further?
+
+At the very end of your response, on a new line, write exactly this format with your estimated probability (0-100) that this stock could double in price within 2 years:
+2X_LIKELIHOOD: [number]`;
 
     // Use local API route to avoid CORS issues
     const response = await fetch("/api/grok", {
@@ -258,20 +264,23 @@ Provide: 1) Investment thesis 2) Main risk 3) Worth researching? (Yes/No)`;
     if (!response.ok) {
       const errorData = await response.json();
       console.error(`Grok API error:`, errorData);
-      return `API Error: ${errorData.error || response.status}`;
+      return { analysis: `API Error: ${errorData.error || response.status}`, doubleChance: null };
     }
 
     const data = await response.json();
     
     if (data.analysis) {
       console.log(`Grok analysis complete for ${stock.ticker}`);
-      return data.analysis;
+      return { 
+        analysis: data.analysis, 
+        doubleChance: data.doubleChance 
+      };
     }
     
-    return data.error || 'No response from AI';
+    return { analysis: data.error || 'No response from AI', doubleChance: null };
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return `Error: ${e.message}`;
+    return { analysis: `Error: ${e.message}`, doubleChance: null };
   }
 }
 
@@ -466,11 +475,6 @@ export default function StockResearchApp() {
   const runGrokAnalysis = async () => {
     if (isAnalyzingAI || stocks.length === 0) return;
     
-    if (!GROK_KEY) {
-      setError('Grok API key not configured. Add NEXT_PUBLIC_GROK_KEY to Vercel environment variables.');
-      return;
-    }
-    
     setIsAnalyzingAI(true);
     setError(null);
     
@@ -483,10 +487,14 @@ export default function StockResearchApp() {
       setAiProgress({ current: i + 1, total: top10.length });
       setStatus({ type: 'loading', msg: `Grok analyzing ${top10[i].ticker} (${i + 1}/${top10.length})...` });
       
-      const analysis = await getAIAnalysis(top10[i]);
+      const result = await getAIAnalysis(top10[i]);
       
       updatedStocks = updatedStocks.map(s => 
-        s.ticker === top10[i].ticker ? { ...s, aiAnalysis: analysis } : s
+        s.ticker === top10[i].ticker ? { 
+          ...s, 
+          aiAnalysis: result.analysis,
+          doubleChance: result.doubleChance 
+        } : s
       );
       setStocks(updatedStocks);
       
@@ -637,6 +645,11 @@ export default function StockResearchApp() {
     .sort((a, b) => {
       if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
       if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
+      if (sortBy === 'insiderDate') {
+        const dateA = a.lastInsiderPurchase?.date ? new Date(a.lastInsiderPurchase.date).getTime() : 0;
+        const dateB = b.lastInsiderPurchase?.date ? new Date(b.lastInsiderPurchase.date).getTime() : 0;
+        return dateB - dateA;
+      }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
@@ -844,16 +857,29 @@ export default function StockResearchApp() {
                 </div>
               </div>
               
-              {/* Column Headers */}
+              {/* Column Headers - Clickable for sorting */}
               {sorted.length > 0 && (
                 <div className="px-4 py-2 border-b border-slate-800/50 flex items-center gap-4 text-xs text-slate-500 font-medium" style={{ background: 'rgba(15,23,42,0.5)' }}>
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
                   <div className="w-24 text-right">Price / MCap</div>
                   <div className="w-28 text-center">Net Cash</div>
-                  <div className="w-36 text-center">Last Insider Buy</div>
+                  <div 
+                    className="w-36 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'insiderDate' ? 'compositeScore' : 'insiderDate')}
+                  >
+                    Last Insider Buy
+                    {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
+                  </div>
+                  <div className="w-20 text-center">2x Chance</div>
                   <div className="w-24 text-center">From 52w Low</div>
-                  <div className="w-28 text-center">Score</div>
+                  <div 
+                    className="w-28 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy('compositeScore')}
+                  >
+                    Score
+                    {sortBy === 'compositeScore' && <span className="text-indigo-400">↓</span>}
+                  </div>
                   <div className="w-8"></div>
                 </div>
               )}
@@ -877,6 +903,21 @@ export default function StockResearchApp() {
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
                         <div className="w-28 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
                         <div className="w-36 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        <div className="w-20 text-center">
+                          {s.doubleChance !== null && s.doubleChance !== undefined ? (
+                            <span 
+                              className="text-sm font-bold mono px-2 py-1 rounded-lg"
+                              style={{ 
+                                background: s.doubleChance >= 60 ? 'rgba(16,185,129,0.2)' : s.doubleChance >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.doubleChance >= 60 ? '#34d399' : s.doubleChance >= 40 ? '#fbbf24' : '#f87171'
+                              }}
+                            >
+                              {s.doubleChance}%
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
                         <div className="w-24 text-center">
                           <div className="mono text-sm font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
                         </div>

@@ -10,13 +10,24 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v7';
+const CACHE_KEY = 'valuehunter_cache_v8';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
 const MAX_MARKET_CAP = 400_000_000;
 
 const TEST_MODE_LIMIT = 300;
+
+// Simple category filters
+const STOCK_CATEGORIES = {
+  all: { name: 'All Stocks', keywords: [] },
+  tech: { name: 'Tech', keywords: ['software', 'computer', 'semiconductor', 'electronic', 'technology', 'data processing', 'internet', 'cloud', 'cyber', 'digital'] },
+  social: { name: 'Social Media', keywords: ['social', 'media', 'advertising', 'digital media', 'internet', 'platform', 'network', 'communication'] },
+  familiar: { name: 'Consumer/Familiar', keywords: ['retail', 'restaurant', 'food', 'beverage', 'apparel', 'consumer', 'entertainment', 'hotel', 'leisure', 'gaming'] },
+  biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
+  finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
+  energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
+};
 
 const discoveryAgents = [
   { id: 'polygonScreener', name: 'Polygon Screener', icon: Database, color: '#8B5CF6', coverage: 'All US stocks' },
@@ -226,31 +237,74 @@ async function getInsiderTransactions(ticker) {
 }
 
 // ============================================
-// GROK AI ANALYSIS - Uses local API route to avoid CORS
+// PRICE TARGET FUNCTION - Gets analyst price targets from Finnhub
+// ============================================
+async function getPriceTarget(ticker, currentPrice) {
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/price-target?symbol=${ticker}&token=${FINNHUB_KEY}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    
+    if (data.targetHigh && data.targetLow && data.targetMean) {
+      const avgTarget = data.targetMean;
+      const upsidePct = currentPrice > 0 ? Math.round(((avgTarget - currentPrice) / currentPrice) * 100) : null;
+      
+      return {
+        high: data.targetHigh,
+        low: data.targetLow,
+        mean: data.targetMean,
+        median: data.targetMedian,
+        upsidePct: upsidePct,
+        numAnalysts: data.lastUpdated ? 1 : 0 // Finnhub doesn't always provide count
+      };
+    }
+    return null;
+  } catch (e) {
+    console.warn(`Price target failed for ${ticker}:`, e);
+    return null;
+  }
+}
+
+// ============================================
+// GROK AI ANALYSIS - Deep analysis focused on future potential
 // ============================================
 async function getAIAnalysis(stock) {
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
-    const prompt = `You are a stock research analyst. For the stock ${stock.ticker} (${stock.name}), I need you to:
+    const prompt = `Conduct a comprehensive deep-dive analysis on ${stock.ticker} (${stock.name}) for a value investor seeking high-conviction small-cap opportunities.
 
-1. Search recent Stocktwits posts and social sentiment about ${stock.ticker}. Look for any hidden value, upcoming catalysts, news, or insider discussions that retail investors are talking about.
-
-2. Find analyst price targets from reputable firms (Wall Street analysts, investment banks) for ${stock.ticker}. Calculate the average price target and the percentage upside/downside from the current price of $${stock.price?.toFixed(2)}.
-
-Current Stock Info:
+CURRENT DATA:
+- Stock: ${stock.ticker} (${stock.name})
 - Price: $${stock.price?.toFixed(2)}
 - Market Cap: $${stock.marketCap}M
 - 52-Week Range: $${stock.low52?.toFixed(2)} - $${stock.high52?.toFixed(2)}
+- Position: ${stock.fromLow?.toFixed(1)}% above 52-week low
+- Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'}
+- Last Insider Purchase: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
+${stock.priceTarget ? '- Analyst Target: $' + stock.priceTarget.mean?.toFixed(2) + ' (' + stock.priceTarget.upsidePct + '% upside)' : ''}
 
-Write in plain text without markdown or asterisks. Provide:
-1) Key themes/catalysts from Stocktwits discussions (2-3 sentences)
-2) Any notable news or upcoming events mentioned
-3) Analyst consensus and average price target
+RESEARCH & ANALYZE:
 
-At the very end, on a new line, write exactly:
-UPSIDE_PCT: [number]
-where [number] is the percentage upside to average analyst price target (negative if downside). If no analyst targets found, estimate based on sentiment.`;
+1. FUTURE CATALYSTS & UPSIDE POTENTIAL
+Search Stocktwits, Twitter/X, and investing forums for ${stock.ticker}. What are traders discussing? Any upcoming catalysts - earnings, FDA decisions, contract announcements, product launches, or M&A rumors? What could drive this stock 50-200% higher?
+
+2. INSIDER CONVICTION ANALYSIS
+Research the insider ownership of ${stock.ticker}. How much of the company do insiders own? Have executives been buying or selling? Estimate what percentage of their personal net worth key insiders have invested in this stock. High insider ownership (10%+) with recent buying shows strong conviction.
+
+3. HIDDEN VALUE & ASYMMETRIC OPPORTUNITY
+What might the market be missing? Is there hidden asset value, underappreciated growth, or a turnaround story? What's the bull case that isn't priced in?
+
+4. KEY RISKS & BEAR CASE
+What could go wrong? Dilution risk? Cash burn? Competition? Regulatory issues?
+
+5. VERDICT
+Is this a high-conviction opportunity with significant upside potential?
+
+At the very end, on a new line, provide your estimate of insider conviction (0-100 scale, where 100 = insiders have massive personal stakes and are actively buying):
+INSIDER_CONVICTION: [number]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -265,7 +319,7 @@ where [number] is the percentage upside to average analyst price target (negativ
     if (!response.ok) {
       const errorData = await response.json();
       console.error(`Grok API error:`, errorData);
-      return { analysis: `API Error: ${errorData.error || response.status}`, upsidePct: null };
+      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null };
     }
 
     const data = await response.json();
@@ -274,14 +328,14 @@ where [number] is the percentage upside to average analyst price target (negativ
       console.log(`Grok analysis complete for ${stock.ticker}`);
       return { 
         analysis: data.analysis, 
-        upsidePct: data.upsidePct 
+        insiderConviction: data.insiderConviction 
       };
     }
     
-    return { analysis: data.error || 'No response from AI', upsidePct: null };
+    return { analysis: data.error || 'No response from AI', insiderConviction: null };
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return { analysis: `Error: ${e.message}`, upsidePct: null };
+    return { analysis: `Error: ${e.message}`, insiderConviction: null };
   }
 }
 
@@ -354,6 +408,7 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
     financialSource: financials?.source || null,
     lastInsiderPurchase: insiderData,
     hasInsiderData: insiderData !== null,
+    priceTarget: null, // Will be filled in separately
     agentScores: {
       pricePosition: pricePositionScore,
       insiderActivity: insiderScore,
@@ -432,6 +487,16 @@ export default function StockResearchApp() {
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
+
+  // Filter by category keywords
+  const matchesCategory = (stock, categoryKey) => {
+    if (categoryKey === 'all') return true;
+    const category = STOCK_CATEGORIES[categoryKey];
+    if (!category) return true;
+    const sectorLower = (stock.sector || '').toLowerCase();
+    const nameLower = (stock.name || '').toLowerCase();
+    return category.keywords.some(kw => sectorLower.includes(kw) || nameLower.includes(kw));
+  };
   const [lastUpdate, setLastUpdate] = useState(null);
   const [status, setStatus] = useState({ type: 'ready', msg: 'Loading...' });
   const [error, setError] = useState(null);
@@ -439,6 +504,7 @@ export default function StockResearchApp() {
   const [cacheAge, setCacheAge] = useState(null);
   const [testMode, setTestMode] = useState(true);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
+  const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10); // How many stocks to analyze with Grok
 
   const calcScores = useCallback((list, w) => {
     const total = Object.values(w).reduce((a, b) => a + b, 0);
@@ -479,28 +545,30 @@ export default function StockResearchApp() {
     setIsAnalyzingAI(true);
     setError(null);
     
-    const top10 = stocks.slice(0, 10);
-    setAiProgress({ current: 0, total: top10.length });
+    // Use aiAnalyzeCount, or all stocks if set to 0 or 'all'
+    const countToAnalyze = aiAnalyzeCount === 0 ? stocks.length : Math.min(aiAnalyzeCount, stocks.length);
+    const stocksToAnalyze = stocks.slice(0, countToAnalyze);
+    setAiProgress({ current: 0, total: stocksToAnalyze.length });
     
     let updatedStocks = [...stocks];
     
-    for (let i = 0; i < top10.length; i++) {
-      setAiProgress({ current: i + 1, total: top10.length });
-      setStatus({ type: 'loading', msg: `Grok analyzing ${top10[i].ticker} (${i + 1}/${top10.length})...` });
+    for (let i = 0; i < stocksToAnalyze.length; i++) {
+      setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
+      setStatus({ type: 'loading', msg: `Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
-      const result = await getAIAnalysis(top10[i]);
+      const result = await getAIAnalysis(stocksToAnalyze[i]);
       
       updatedStocks = updatedStocks.map(s => 
-        s.ticker === top10[i].ticker ? { 
+        s.ticker === stocksToAnalyze[i].ticker ? { 
           ...s, 
           aiAnalysis: result.analysis,
-          upsidePct: result.upsidePct 
+          insiderConviction: result.insiderConviction 
         } : s
       );
       setStocks(updatedStocks);
       
       // Rate limit - wait 2 seconds between calls
-      if (i < top10.length - 1) {
+      if (i < stocksToAnalyze.length - 1) {
         await new Promise(r => setTimeout(r, 2000));
       }
     }
@@ -512,6 +580,40 @@ export default function StockResearchApp() {
     setIsAnalyzingAI(false);
     setAiProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
+  };
+  
+  // Fetch price targets for all stocks
+  const fetchPriceTargets = async () => {
+    if (stocks.length === 0) return;
+    
+    setStatus({ type: 'loading', msg: 'Fetching analyst price targets...' });
+    
+    let updatedStocks = [...stocks];
+    let fetched = 0;
+    
+    for (let i = 0; i < stocks.length; i++) {
+      const priceTarget = await getPriceTarget(stocks[i].ticker, stocks[i].price);
+      
+      if (priceTarget) {
+        updatedStocks = updatedStocks.map(s => 
+          s.ticker === stocks[i].ticker ? { ...s, priceTarget } : s
+        );
+        fetched++;
+      }
+      
+      // Update every 10 stocks
+      if (i % 10 === 0) {
+        setStocks(updatedStocks);
+        setStatus({ type: 'loading', msg: `Fetching price targets... ${i + 1}/${stocks.length} (${fetched} found)` });
+      }
+      
+      // Rate limit
+      await new Promise(r => setTimeout(r, 200));
+    }
+    
+    setStocks(updatedStocks);
+    saveToCache(updatedStocks, scanProgress);
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • ${fetched} price targets found` });
   };
 
   const runFullScan = async (forceRescan = false) => {
@@ -642,7 +744,7 @@ export default function StockResearchApp() {
   };
 
   const sorted = [...stocks]
-    .filter(s => sectorFilter === 'all' || s.sector === sectorFilter)
+    .filter(s => matchesCategory(s, sectorFilter))
     .sort((a, b) => {
       if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
       if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
@@ -654,7 +756,8 @@ export default function StockResearchApp() {
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
-  const sectors = [...new Set(stocks.map(s => s.sector))].filter(Boolean).sort();
+  // Not needed anymore - using predefined categories
+  // const sectors = [...new Set(stocks.map(s => s.sector))].filter(Boolean).sort();
 
   const StatusIcon = ({ s }) => {
     if (s === 'running') return <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />;
@@ -718,23 +821,55 @@ export default function StockResearchApp() {
             <button onClick={() => setShowWeights(!showWeights)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showWeights ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showWeights ? '#fcd34d' : '#94a3b8' }}><Sliders className="w-4 h-4" />Weights</button>
             
             {stocks.length > 0 && (
-              <button 
-                onClick={runGrokAnalysis} 
-                disabled={isAnalyzingAI || isScanning}
-                className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
-                style={{ 
-                  background: isAnalyzingAI ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
-                  borderColor: 'rgba(239,68,68,0.3)', 
-                  color: '#f87171',
-                  opacity: (isAnalyzingAI || isScanning) ? 0.7 : 1
-                }}
-              >
-                {isAnalyzingAI ? (
-                  <><RefreshCw className="w-4 h-4 animate-spin" />Analyzing {aiProgress.current}/{aiProgress.total}...</>
-                ) : (
-                  <><Sparkles className="w-4 h-4" />Grok AI (Top 10)</>
-                )}
-              </button>
+              <>
+                {/* Price Targets Button */}
+                <button 
+                  onClick={fetchPriceTargets} 
+                  disabled={isAnalyzingAI || isScanning}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: 'rgba(16,185,129,0.1)', 
+                    borderColor: 'rgba(16,185,129,0.3)', 
+                    color: '#34d399',
+                    opacity: (isAnalyzingAI || isScanning) ? 0.7 : 1
+                  }}
+                >
+                  <Target className="w-4 h-4" />Price Targets
+                </button>
+                
+                {/* AI Count Selector */}
+                <select 
+                  value={aiAnalyzeCount} 
+                  onChange={e => setAiAnalyzeCount(parseInt(e.target.value))}
+                  className="rounded-lg px-2 py-2 text-sm border outline-none"
+                  style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171', width: '70px' }}
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={0}>All</option>
+                </select>
+                
+                {/* Grok AI Button */}
+                <button 
+                  onClick={runGrokAnalysis} 
+                  disabled={isAnalyzingAI || isScanning}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isAnalyzingAI ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
+                    borderColor: 'rgba(239,68,68,0.3)', 
+                    color: '#f87171',
+                    opacity: (isAnalyzingAI || isScanning) ? 0.7 : 1
+                  }}
+                >
+                  {isAnalyzingAI ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Analyzing {aiProgress.current}/{aiProgress.total}...</>
+                  ) : (
+                    <><Sparkles className="w-4 h-4" />Grok AI</>
+                  )}
+                </button>
+              </>
             )}
             
             {!isScanning && stocks.length > 0 && (
@@ -836,9 +971,9 @@ export default function StockResearchApp() {
               </div>
               
               <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
-                <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI</h3>
-                <p className="text-xs text-slate-400 mb-2">Click "Grok AI (Top 10)" to analyze top stocks.</p>
-                <p className="text-xs text-slate-500">{stocksWithAI} of {Math.min(10, stocks.length)} analyzed</p>
+                <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Deep Analysis</h3>
+                <p className="text-xs text-slate-400 mb-2">Analyzes Stocktwits sentiment, insider conviction, future catalysts, and upside potential.</p>
+                <p className="text-xs text-slate-500">{stocksWithAI} stocks analyzed</p>
               </div>
             </div>
           </div>
@@ -848,11 +983,14 @@ export default function StockResearchApp() {
               <div className="p-5 border-b border-slate-800/50 flex items-center justify-between">
                 <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
                 <div className="flex gap-3">
-                  <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}><option value="all">All Sectors</option>{sectors.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                  <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
+                    {Object.entries(STOCK_CATEGORIES).map(([key, cat]) => (
+                      <option key={key} value={key}>{cat.name}</option>
+                    ))}
+                  </select>
                   <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
-                    <option value="compositeScore">Composite Score</option>
-                    <option value="pricePosition">Price Position</option>
-                    <option value="insiderActivity">Insider Activity</option>
+                    <option value="compositeScore">Score</option>
+                    <option value="insiderDate">Recent Insider Buys</option>
                     <option value="netCash">Net Cash</option>
                   </select>
                 </div>
@@ -905,15 +1043,15 @@ export default function StockResearchApp() {
                         <div className="w-28 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
                         <div className="w-36 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
                         <div className="w-20 text-center">
-                          {s.upsidePct !== null && s.upsidePct !== undefined ? (
+                          {s.priceTarget?.upsidePct !== null && s.priceTarget?.upsidePct !== undefined ? (
                             <span 
                               className="text-sm font-bold mono px-2 py-1 rounded-lg"
                               style={{ 
-                                background: s.upsidePct >= 30 ? 'rgba(16,185,129,0.2)' : s.upsidePct >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
-                                color: s.upsidePct >= 30 ? '#34d399' : s.upsidePct >= 0 ? '#fbbf24' : '#f87171'
+                                background: s.priceTarget.upsidePct >= 30 ? 'rgba(16,185,129,0.2)' : s.priceTarget.upsidePct >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.priceTarget.upsidePct >= 30 ? '#34d399' : s.priceTarget.upsidePct >= 0 ? '#fbbf24' : '#f87171'
                               }}
                             >
-                              {s.upsidePct > 0 ? '+' : ''}{s.upsidePct}%
+                              {s.priceTarget.upsidePct > 0 ? '+' : ''}{s.priceTarget.upsidePct}%
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
@@ -987,7 +1125,10 @@ export default function StockResearchApp() {
         </div>
         
         <footer className="mt-8 pb-8 flex items-center justify-between">
-          <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
+          <div className="flex items-center gap-4">
+            <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.2</span>
+          </div>
           <button 
             onClick={() => {
               setTestMode(!testMode);

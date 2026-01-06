@@ -22,14 +22,14 @@ export async function POST(request) {
         messages: [
           { 
             role: "system",
-            content: "You are an elite hedge fund analyst with deep expertise in small-cap value investing. You have access to real-time social sentiment, SEC filings, analyst reports, and market data. Provide thorough, institutional-quality analysis. Be specific with numbers, dates, and sources when possible. Never use markdown formatting like ** or ## - write in clean plain text."
+            content: "You are an elite hedge fund analyst with deep expertise in small-cap value investing. You have access to real-time social sentiment, SEC filings, insider ownership data, analyst reports, and market data. Provide thorough, institutional-quality analysis focused on future upside potential. Be specific with numbers, dates, and sources when possible. Never use markdown formatting like ** or ## - write in clean plain text."
           },
           { 
             role: "user", 
             content: prompt 
           }
         ],
-        max_tokens: 1000,
+        max_tokens: 1200,
         temperature: 0.3
       })
     });
@@ -46,17 +46,17 @@ export async function POST(request) {
     // Clean up any markdown formatting
     text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
     
-    // Extract upside percentage
-    let upsidePct = null;
-    const match = text.match(/UPSIDE_PCT:\s*([+-]?\d+)/i);
-    if (match) {
-      upsidePct = parseInt(match[1]);
-      text = text.replace(/UPSIDE_PCT:\s*[+-]?\d+%?/i, '').trim();
+    // Extract insider conviction score (0-100)
+    let insiderConviction = null;
+    const convictionMatch = text.match(/INSIDER_CONVICTION:\s*(\d+)/i);
+    if (convictionMatch) {
+      insiderConviction = parseInt(convictionMatch[1]);
+      text = text.replace(/INSIDER_CONVICTION:\s*\d+%?/i, '').trim();
     }
     
     return Response.json({ 
       analysis: text || 'No response from AI',
-      upsidePct: upsidePct
+      insiderConviction: insiderConviction
     });
     
   } catch (error) {

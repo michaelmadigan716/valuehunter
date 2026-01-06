@@ -226,14 +226,9 @@ async function getInsiderTransactions(ticker) {
 }
 
 // ============================================
-// GROK AI ANALYSIS - Updated to use grok-4
+// GROK AI ANALYSIS - Uses local API route to avoid CORS
 // ============================================
 async function getAIAnalysis(stock) {
-  if (!GROK_KEY) {
-    console.warn('Grok API key not configured');
-    return 'API key not configured';
-  }
-  
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
@@ -249,43 +244,31 @@ Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} ${stoc
 
 Provide: 1) Investment thesis 2) Main risk 3) Worth researching? (Yes/No)`;
 
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    // Use local API route to avoid CORS issues
+    const response = await fetch("/api/grok", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROK_KEY}`
       },
-      body: JSON.stringify({
-        model: "grok-3-latest",
-        messages: [
-          { 
-            role: "user", 
-            content: prompt 
-          }
-        ],
-        max_tokens: 400,
-        temperature: 0.7
-      })
+      body: JSON.stringify({ prompt })
     });
 
     console.log(`Grok API response status: ${response.status}`);
     
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Grok API error: ${response.status}`, errorText);
-      return `API Error: ${response.status}`;
+      const errorData = await response.json();
+      console.error(`Grok API error:`, errorData);
+      return `API Error: ${errorData.error || response.status}`;
     }
 
     const data = await response.json();
-    console.log('Grok response:', JSON.stringify(data).slice(0, 200));
     
-    const text = data.choices?.[0]?.message?.content;
-    if (text) {
+    if (data.analysis) {
       console.log(`Grok analysis complete for ${stock.ticker}`);
-      return text;
+      return data.analysis;
     }
     
-    return 'No response from AI';
+    return data.error || 'No response from AI';
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
     return `Error: ${e.message}`;

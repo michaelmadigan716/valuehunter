@@ -8,15 +8,15 @@ import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, Refr
 // ============================================
 const POLYGON_KEY = 'clWwV5gBj4FG9f5o3M1IlMpp3p_p_vJS';
 const FINNHUB_KEY = 'd5e309hr01qjckl1horgd5e309hr01qjckl1hos0';
+const GROK_KEY = 'xai-pFkSo9qv8nzIX5ttJivZ4zrNBALGkjYsOFu4pysnJvHPQSndBvcBOFcrYwhtveenzO7o6JsfQ28mS66Y';
 
-const CACHE_KEY = 'valuehunter_cache_v3';
-const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_KEY = 'valuehunter_cache_v5';
+const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
-// Market cap range (in dollars for Polygon)
-const MIN_MARKET_CAP = 40_000_000;   // $40M
-const MAX_MARKET_CAP = 400_000_000;  // $400M
+const MIN_MARKET_CAP = 40_000_000;
+const MAX_MARKET_CAP = 400_000_000;
 
-const TEST_MODE_LIMIT = 100; // Max stocks to scan in test mode
+const TEST_MODE_LIMIT = 600;
 
 const discoveryAgents = [
   { id: 'polygonScreener', name: 'Polygon Screener', icon: Database, color: '#8B5CF6', coverage: 'All US stocks' },
@@ -24,7 +24,7 @@ const discoveryAgents = [
   { id: 'technicalScanner', name: 'Technical Scanner', icon: Activity, color: '#F59E0B', coverage: '52-week analysis' },
   { id: 'insiderScanner', name: 'Insider Scanner', icon: Users, color: '#10B981', coverage: 'SEC Form 4' },
   { id: 'financialScanner', name: 'Financial Scanner', icon: Banknote, color: '#EC4899', coverage: 'Cash & Debt' },
-  { id: 'aiAnalyzer', name: 'AI Analyzer', icon: Sparkles, color: '#EF4444', coverage: 'Top 3 analysis' },
+  { id: 'aiAnalyzer', name: 'Grok AI Analyzer', icon: Sparkles, color: '#EF4444', coverage: 'Top 3 analysis' },
 ];
 
 const analysisAgents = [
@@ -41,7 +41,7 @@ async function getFilteredTickers(testMode = false) {
   const tickers = [];
   let nextUrl = `https://api.polygon.io/v3/reference/tickers?market=stocks&active=true&limit=1000&apiKey=${POLYGON_KEY}`;
   let pageCount = 0;
-  const maxPages = testMode ? 1 : 100; // Limit pages in test mode
+  const maxPages = testMode ? 2 : 100;
   
   while (nextUrl && pageCount < maxPages) {
     const res = await fetch(nextUrl);
@@ -58,7 +58,6 @@ async function getFilteredTickers(testMode = false) {
       );
       tickers.push(...filtered);
       
-      // In test mode, stop once we have enough
       if (testMode && tickers.length >= TEST_MODE_LIMIT) {
         return tickers.slice(0, TEST_MODE_LIMIT);
       }
@@ -103,26 +102,60 @@ async function get52WeekData(ticker) {
   } catch (e) { return []; }
 }
 
-// Fetch financials for cash and debt
 async function getFinancials(ticker) {
   try {
     const res = await fetch(
-      `https://api.polygon.io/vX/reference/financials?ticker=${ticker}&limit=1&apiKey=${POLYGON_KEY}`
+      `https://api.polygon.io/vX/reference/financials?ticker=${ticker}&limit=1&sort=filing_date&order=desc&apiKey=${POLYGON_KEY}`
     );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const results = data.results?.[0];
-    if (results?.financials) {
-      const bs = results.financials.balance_sheet;
-      const cash = bs?.cash_and_cash_equivalents?.value || bs?.cash?.value || 0;
-      const debt = bs?.long_term_debt?.value || bs?.total_debt?.value || 0;
-      return { cash, debt, netCash: cash - debt };
+    if (res.ok) {
+      const data = await res.json();
+      const results = data.results?.[0];
+      if (results?.financials) {
+        const bs = results.financials.balance_sheet || {};
+        
+        const cash = 
+          bs.cash_and_cash_equivalents?.value ||
+          bs.cash_and_short_term_investments?.value ||
+          bs.cash?.value ||
+          0;
+        
+        const debt = 
+          bs.long_term_debt?.value ||
+          bs.total_debt?.value ||
+          bs.short_long_term_debt_total?.value ||
+          0;
+        
+        if (cash > 0 || debt > 0) {
+          return { cash, debt, netCash: cash - debt };
+        }
+      }
     }
-    return null;
-  } catch (e) { return null; }
+  } catch (e) { 
+    console.warn(`Polygon financials failed for ${ticker}:`, e);
+  }
+  
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const metrics = data.metric || {};
+      
+      const cash = metrics.cashPerShareAnnual * (metrics.shareOutstanding || 0) * 1000000 || 0;
+      const debt = metrics.totalDebtToEquityAnnual ? metrics.bookValuePerShareAnnual * metrics.shareOutstanding * 1000000 * (metrics.totalDebtToEquityAnnual / 100) : 0;
+      
+      if (cash > 0 || debt > 0) {
+        return { cash, debt, netCash: cash - debt };
+      }
+    }
+  } catch (e) {
+    console.warn(`Finnhub metrics failed for ${ticker}:`, e);
+  }
+  
+  return null;
 }
 
-// Fetch insider transactions from Finnhub
 async function getInsiderTransactions(ticker) {
   try {
     const res = await fetch(
@@ -131,55 +164,93 @@ async function getInsiderTransactions(ticker) {
     if (!res.ok) return null;
     const data = await res.json();
     
-    // Find the most recent purchase (acquisition)
-    const purchases = (data.data || []).filter(t => 
-      t.transactionType === 'P - Purchase' || 
-      t.acquisitionOrDisposition === 'A'
-    ).sort((a, b) => new Date(b.transactionDate) - new Date(a.transactionDate));
+    if (!data.data || data.data.length === 0) return null;
     
-    if (purchases.length > 0) {
-      const latest = purchases[0];
-      return {
-        date: latest.transactionDate,
-        amount: latest.share * (latest.price || 0),
-        shares: latest.share,
-        price: latest.price,
-        name: latest.name,
-      };
-    }
-    return null;
-  } catch (e) { return null; }
+    const purchases = data.data.filter(t => {
+      const isPurchase = 
+        t.transactionCode === 'P' ||
+        t.transactionCode === 'M' ||
+        (t.acquisitionOrDisposition === 'A' && t.change > 0);
+      
+      return isPurchase && t.change > 0 && t.transactionDate;
+    });
+    
+    if (purchases.length === 0) return null;
+    
+    purchases.sort((a, b) => new Date(b.transactionDate) - new Date(a.transactionDate));
+    
+    const latest = purchases[0];
+    const amount = Math.abs(latest.change || 0) * (latest.price || 0);
+    
+    return {
+      date: latest.transactionDate,
+      amount: amount,
+      shares: Math.abs(latest.change || 0),
+      price: latest.price || 0,
+      name: latest.name || 'Unknown',
+      filingDate: latest.filingDate,
+      transactionCode: latest.transactionCode,
+    };
+  } catch (e) { 
+    console.warn(`Insider transactions failed for ${ticker}:`, e);
+    return null; 
+  }
 }
 
-// AI Analysis using Claude API
+// ============================================
+// GROK AI ANALYSIS
+// ============================================
 async function getAIAnalysis(stock) {
+  console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
+  
   try {
-    const prompt = `Analyze this small-cap stock for a value investor. Be concise (3-4 sentences max).
+    const prompt = `You are a value investing analyst. Analyze this small-cap stock in 3-4 concise sentences.
 
 Stock: ${stock.ticker} (${stock.name})
 Price: $${stock.price?.toFixed(2)}
 Market Cap: $${stock.marketCap}M
-52-Week Low: $${stock.low52?.toFixed(2)} | High: $${stock.high52?.toFixed(2)}
-Current position: ${stock.fromLow?.toFixed(1)}% above 52-week low
-Net Cash Position: $${((stock.netCash || 0) / 1000000).toFixed(1)}M
-Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} for $${((stock.lastInsiderPurchase?.amount || 0) / 1000).toFixed(0)}K
+52-Week: Low $${stock.low52?.toFixed(2)} | High $${stock.high52?.toFixed(2)}
+Position: ${stock.fromLow?.toFixed(1)}% above 52-week low
+Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Data unavailable'}
+Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' for $' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() : 'None in past year'}
 
-Give a brief investment thesis: Is this a potential buy? What are the key risks and opportunities?`;
+Provide: 1) Quick investment thesis 2) Key risk 3) Is this worth researching further?`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GROK_KEY}`
+      },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 300,
-        messages: [{ role: "user", content: prompt }],
+        model: "grok-beta",
+        messages: [
+          { role: "system", content: "You are a concise value investing analyst. Keep responses brief and actionable." },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 350,
+        temperature: 0.7
       })
     });
 
+    if (!response.ok) {
+      console.error(`Grok API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('Error details:', errorText);
+      return null;
+    }
+
     const data = await response.json();
-    return data.content?.[0]?.text || null;
+    console.log(`Grok analysis complete for ${stock.ticker}`);
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (text) {
+      return text;
+    }
+    
+    return null;
   } catch (e) {
-    console.error('AI analysis failed:', e);
+    console.error('Grok AI analysis failed:', e);
     return null;
   }
 }
@@ -202,8 +273,8 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   const currentPrice = prevDay?.c || 0;
   const prices = historicalData.map(d => d.c);
   
-  const high52 = Math.max(...prices);
-  const low52 = Math.min(...prices);
+  const high52 = prices.length > 0 ? Math.max(...prices) : currentPrice;
+  const low52 = prices.length > 0 ? Math.min(...prices) : currentPrice;
   const range52 = high52 - low52;
   const positionIn52Week = range52 > 0 ? ((currentPrice - low52) / range52) * 100 : 50;
   const fromLow = low52 > 0 ? ((currentPrice - low52) / low52) * 100 : 0;
@@ -212,24 +283,30 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   const change = prevDay?.o ? ((currentPrice - prevDay.o) / prevDay.o) * 100 : 0;
   const marketCapM = Math.round((details?.market_cap || 0) / 1_000_000);
   
-  // Net cash calculation
-  const netCash = financials?.netCash || 0;
-  const netCashM = netCash / 1_000_000;
+  const cash = financials?.cash || 0;
+  const debt = financials?.debt || 0;
+  const netCash = financials?.netCash || (cash - debt);
   
-  // Score calculations
   const pricePositionScore = Math.max(0, Math.min(100, 100 - positionIn52Week));
   
-  // Insider score based on recency
-  let insiderScore = 30;
+  let insiderScore = 20;
   if (insiderData?.date) {
     const daysSincePurchase = Math.floor((Date.now() - new Date(insiderData.date)) / (1000 * 60 * 60 * 24));
-    if (daysSincePurchase < 30) insiderScore = 90;
+    if (daysSincePurchase < 30) insiderScore = 95;
+    else if (daysSincePurchase < 60) insiderScore = 85;
     else if (daysSincePurchase < 90) insiderScore = 70;
-    else if (daysSincePurchase < 180) insiderScore = 50;
+    else if (daysSincePurchase < 180) insiderScore = 55;
+    else if (daysSincePurchase < 365) insiderScore = 40;
   }
   
-  // Net cash score
-  const netCashScore = netCash > 0 ? Math.min(100, 50 + (netCashM / marketCapM) * 100) : Math.max(0, 50 + (netCashM / marketCapM) * 50);
+  let netCashScore = 50;
+  if (netCash > 0) {
+    const cashToMarketCap = (netCash / 1000000) / marketCapM;
+    netCashScore = Math.min(100, 50 + cashToMarketCap * 100);
+  } else if (netCash < 0) {
+    const debtToMarketCap = Math.abs(netCash / 1000000) / marketCapM;
+    netCashScore = Math.max(0, 50 - debtToMarketCap * 50);
+  }
   
   return {
     id: idx + 1,
@@ -240,27 +317,20 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
     marketCap: marketCapM,
     change,
     high52, low52, positionIn52Week, fromLow, rsi,
-    
-    // Financial data
-    cash: financials?.cash || 0,
-    debt: financials?.debt || 0,
-    netCash,
-    netCashM,
-    
-    // Insider data
+    cash, debt, netCash,
+    hasFinancials: financials !== null,
     lastInsiderPurchase: insiderData,
-    
+    hasInsiderData: insiderData !== null,
     agentScores: {
       pricePosition: pricePositionScore,
       insiderActivity: insiderScore,
       netCash: netCashScore,
     },
     compositeScore: 0,
-    aiAnalysis: null, // Will be populated for top stocks
+    aiAnalysis: null,
   };
 }
 
-// Cache functions
 function saveToCache(stocks, scanStats) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stocks, scanStats }));
@@ -299,10 +369,14 @@ function formatDate(dateStr) {
 }
 
 function formatMoney(amount) {
-  if (!amount && amount !== 0) return 'N/A';
-  if (Math.abs(amount) >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`;
-  if (Math.abs(amount) >= 1000) return `$${(amount / 1000).toFixed(0)}K`;
-  return `$${amount.toFixed(0)}`;
+  if (amount === null || amount === undefined) return 'N/A';
+  if (amount === 0) return '$0';
+  const absAmount = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+  if (absAmount >= 1000000000) return `${sign}$${(absAmount / 1000000000).toFixed(1)}B`;
+  if (absAmount >= 1000000) return `${sign}$${(absAmount / 1000000).toFixed(1)}M`;
+  if (absAmount >= 1000) return `${sign}$${(absAmount / 1000).toFixed(0)}K`;
+  return `${sign}$${absAmount.toFixed(0)}`;
 }
 
 // ============================================
@@ -329,7 +403,8 @@ export default function StockResearchApp() {
   const [error, setError] = useState(null);
   const [scanProgress, setScanProgress] = useState({ phase: '', current: 0, total: 0, found: 0 });
   const [cacheAge, setCacheAge] = useState(null);
-  const [testMode, setTestMode] = useState(true); // Default to test mode
+  const [testMode, setTestMode] = useState(true);
+  const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
 
   const calcScores = useCallback((list, w) => {
     const total = Object.values(w).reduce((a, b) => a + b, 0);
@@ -380,11 +455,11 @@ export default function StockResearchApp() {
     setIsScanning(true);
     setError(null);
     setStocks([]);
+    setAiProgress({ current: 0, total: 3 });
     const startTime = Date.now();
 
     try {
-      // Phase 1: Get tickers
-      setStatus({ type: 'loading', msg: testMode ? 'Test Mode: Fetching limited stock list...' : 'Fetching stock list...' });
+      setStatus({ type: 'loading', msg: testMode ? `Test Mode: Fetching up to ${TEST_MODE_LIMIT} stocks...` : 'Fetching stock list...' });
       setScanProgress({ phase: 'Loading tickers...', current: 0, total: 0, found: 0 });
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'running' }));
       
@@ -392,9 +467,8 @@ export default function StockResearchApp() {
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'complete', marketCapFilter: 'running' }));
       
       setScanProgress({ phase: 'Filtering by market cap...', current: 0, total: allTickers.length, found: 0 });
-      setStatus({ type: 'loading', msg: `Checking ${allTickers.length} stocks...` });
+      setStatus({ type: 'loading', msg: `Checking ${allTickers.length} stocks for $40M-$400M market cap...` });
 
-      // Phase 2: Filter by market cap
       const qualifiedTickers = [];
       
       for (let i = 0; i < allTickers.length; i++) {
@@ -409,17 +483,16 @@ export default function StockResearchApp() {
         setScanProgress(p => ({ ...p, current: i + 1 }));
         
         if (i % 20 === 0) {
-          setStatus({ type: 'loading', msg: `Filtering... ${i}/${allTickers.length} (${qualifiedTickers.length} found)` });
+          setStatus({ type: 'loading', msg: `Market cap filter: ${i}/${allTickers.length} checked (${qualifiedTickers.length} qualify)` });
         }
         
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 220));
       }
 
       setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running', insiderScanner: 'running', financialScanner: 'running' }));
       
-      // Phase 3: Get detailed data
-      setScanProgress({ phase: 'Analyzing stocks...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
-      setStatus({ type: 'loading', msg: `Analyzing ${qualifiedTickers.length} small-caps...` });
+      setScanProgress({ phase: 'Fetching detailed data...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
+      setStatus({ type: 'loading', msg: `Analyzing ${qualifiedTickers.length} small-caps (technicals, financials, insider data)...` });
       
       const processedStocks = [];
       
@@ -433,40 +506,50 @@ export default function StockResearchApp() {
           getInsiderTransactions(ticker),
         ]);
         
-        if (prevDay && historicalData.length > 50) {
+        if (prevDay && historicalData.length > 20) {
           const processed = processStock(ticker, details, prevDay, historicalData, financials, insiderData, processedStocks.length);
           processedStocks.push(processed);
-          setStocks(calcScores([...processedStocks], weights));
+          
+          if (processedStocks.length % 5 === 0) {
+            setStocks(calcScores([...processedStocks], weights));
+          }
         }
         
         setScanProgress(p => ({ ...p, current: i + 1, phase: `Analyzing ${ticker}...` }));
         
         if (i % 5 === 0) {
           const elapsed = Math.round((Date.now() - startTime) / 1000);
-          setStatus({ type: 'loading', msg: `${processedStocks.length} analyzed (${elapsed}s)` });
+          setStatus({ type: 'loading', msg: `${processedStocks.length} stocks analyzed (${elapsed}s elapsed)` });
         }
         
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 450));
       }
+
+      let scoredStocks = calcScores(processedStocks, weights);
+      setStocks(scoredStocks);
 
       setDiscoveryStatus(p => ({ ...p, technicalScanner: 'complete', insiderScanner: 'complete', financialScanner: 'complete', aiAnalyzer: 'running' }));
       
-      // Phase 4: AI Analysis for top 3
-      setStatus({ type: 'loading', msg: 'Running AI analysis on top stocks...' });
-      setScanProgress(p => ({ ...p, phase: 'AI analyzing top stocks...' }));
+      // Grok AI Analysis for top 3
+      setStatus({ type: 'loading', msg: 'Running Grok AI analysis on top 3 stocks...' });
+      setScanProgress(p => ({ ...p, phase: 'Grok AI analyzing top 3 stocks...' }));
       
-      const scoredStocks = calcScores(processedStocks, weights);
       const top3 = scoredStocks.slice(0, 3);
       
       for (let i = 0; i < top3.length; i++) {
+        setAiProgress({ current: i + 1, total: 3 });
+        setStatus({ type: 'loading', msg: `Grok analyzing ${top3[i].ticker} (${i + 1}/3)...` });
+        
         const analysis = await getAIAnalysis(top3[i]);
+        
         if (analysis) {
-          const stockIndex = scoredStocks.findIndex(s => s.ticker === top3[i].ticker);
-          if (stockIndex !== -1) {
-            scoredStocks[stockIndex] = { ...scoredStocks[stockIndex], aiAnalysis: analysis };
-          }
+          scoredStocks = scoredStocks.map(s => 
+            s.ticker === top3[i].ticker ? { ...s, aiAnalysis: analysis } : s
+          );
+          setStocks(scoredStocks);
         }
-        await new Promise(r => setTimeout(r, 1000));
+        
+        await new Promise(r => setTimeout(r, 1500));
       }
       
       setDiscoveryStatus(p => ({ ...p, aiAnalyzer: 'complete' }));
@@ -493,6 +576,7 @@ export default function StockResearchApp() {
     }
 
     setIsScanning(false);
+    setAiProgress({ current: 0, total: 0 });
     setTimeout(() => {
       setDiscoveryStatus(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
       setAnalysisStatus(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
@@ -521,7 +605,10 @@ export default function StockResearchApp() {
     return <Clock className="w-4 h-4 text-slate-500" />;
   };
 
-  const NetCashBadge = ({ amount }) => {
+  const NetCashBadge = ({ amount, hasData }) => {
+    if (!hasData) {
+      return <span className="text-xs text-slate-500 italic">No data</span>;
+    }
     const isPositive = amount >= 0;
     return (
       <div className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1" 
@@ -534,7 +621,7 @@ export default function StockResearchApp() {
 
   const InsiderBadge = ({ data }) => {
     if (!data?.date) {
-      return <span className="text-xs text-slate-500">No recent</span>;
+      return <span className="text-xs text-slate-500 italic">None found</span>;
     }
     const daysSince = Math.floor((Date.now() - new Date(data.date)) / (1000 * 60 * 60 * 24));
     const isRecent = daysSince < 90;
@@ -544,7 +631,7 @@ export default function StockResearchApp() {
           <Calendar className="w-3 h-3" />
           <span>{formatDate(data.date)}</span>
         </div>
-        <div className="text-slate-400">{formatMoney(data.amount)}</div>
+        <div className="text-slate-400 font-mono">{formatMoney(data.amount)}</div>
       </div>
     );
   };
@@ -561,7 +648,7 @@ export default function StockResearchApp() {
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}><Network className="w-6 h-6 text-white" /></div>
             <div>
               <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #818cf8, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ValueHunter</span><span className="text-slate-400 font-normal ml-2 text-lg">AI</span></h1>
-              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M {testMode && <span className="text-amber-400">• TEST MODE</span>}</p>
+              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M • Powered by Grok AI {testMode && <span className="text-amber-400">• TEST MODE ({TEST_MODE_LIMIT} stocks)</span>}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -601,7 +688,8 @@ export default function StockResearchApp() {
               </div>
               <div className="flex items-center gap-4 text-sm">
                 <span className="text-indigo-400 mono">{scanProgress.current.toLocaleString()} / {scanProgress.total.toLocaleString()}</span>
-                <span className="text-emerald-400 mono">{scanProgress.found} small-caps</span>
+                <span className="text-emerald-400 mono">{scanProgress.found} qualified</span>
+                {aiProgress.total > 0 && <span className="text-violet-400">Grok: {aiProgress.current}/{aiProgress.total}</span>}
               </div>
             </div>
             <div className="h-3 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}>
@@ -616,7 +704,7 @@ export default function StockResearchApp() {
               <h2 className="text-lg font-semibold flex items-center gap-2"><Radar className="w-5 h-5 text-emerald-400" />Discovery Pipeline</h2>
               <div className="flex gap-4 text-center">
                 <div className="px-4 py-2 rounded-xl border" style={{ background: 'rgba(15,23,42,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}><p className="text-[10px] text-slate-500">Scanned</p><p className="mono text-xl font-bold text-slate-200">{scanProgress.total.toLocaleString()}</p></div>
-                <div className="px-4 py-2 rounded-xl border" style={{ background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.2)' }}><p className="text-[10px] text-emerald-400">Small-Caps</p><p className="mono text-xl font-bold text-emerald-400">{scanProgress.found}</p></div>
+                <div className="px-4 py-2 rounded-xl border" style={{ background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.2)' }}><p className="text-[10px] text-emerald-400">Qualified</p><p className="mono text-xl font-bold text-emerald-400">{scanProgress.found}</p></div>
               </div>
             </div>
             <div className="grid grid-cols-6 gap-3">
@@ -660,9 +748,14 @@ export default function StockResearchApp() {
                 ))}
               </div>
               
-              <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
-                <h3 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />AI Analysis</h3>
-                <p className="text-xs text-slate-400">Top 3 ranked stocks receive an AI-powered investment analysis.</p>
+              <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Analysis</h3>
+                <p className="text-xs text-slate-400">Top 3 ranked stocks receive xAI Grok investment analysis with thesis, risks, and recommendation.</p>
+              </div>
+              
+              <div className="mt-4 p-4 rounded-xl border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
+                <h3 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-2"><Users className="w-4 h-4" />Insider Data</h3>
+                <p className="text-xs text-slate-400">SEC Form 4 filings via Finnhub. Shows most recent purchase with date, amount, and insider name.</p>
               </div>
             </div>
           </div>
@@ -674,7 +767,7 @@ export default function StockResearchApp() {
                 <div className="flex gap-3">
                   <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}><option value="all">All Sectors</option>{sectors.map(s => <option key={s} value={s}>{s}</option>)}</select>
                   <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
-                    <option value="compositeScore">Composite</option>
+                    <option value="compositeScore">Composite Score</option>
                     <option value="pricePosition">Price Position</option>
                     <option value="insiderActivity">Insider Activity</option>
                     <option value="netCash">Net Cash</option>
@@ -683,7 +776,7 @@ export default function StockResearchApp() {
               </div>
               <div className="divide-y divide-slate-800/30 max-h-[calc(100vh-300px)] overflow-y-auto">
                 {sorted.length === 0 && !isScanning ? (
-                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p><p className="text-xs text-slate-600 mt-2">{testMode ? 'Test Mode: Limited to 100 stocks' : 'Full scan mode'}</p></div>
+                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p><p className="text-xs text-slate-600 mt-2">{testMode ? `Test Mode: Scanning ${TEST_MODE_LIMIT} stocks` : 'Full scan mode'}</p></div>
                 ) : sorted.map((s, i) => (
                   <div key={s.ticker} className="row cursor-pointer" onClick={() => setSelected(selected?.ticker === s.ticker ? null : s)}>
                     <div className="p-4">
@@ -693,13 +786,13 @@ export default function StockResearchApp() {
                           <div className="flex items-center gap-2">
                             <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
-                            {i < 3 && s.aiAnalysis && <Sparkles className="w-4 h-4 text-violet-400" />}
+                            {i < 3 && s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="Grok AI Analysis Available" />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-24"><NetCashBadge amount={s.netCash} /></div>
-                        <div className="w-32"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        <div className="w-28"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
+                        <div className="w-36"><InsiderBadge data={s.lastInsiderPurchase} /></div>
                         <div className="w-24">
                           <div className="text-xs text-slate-400">From 52w Low</div>
                           <div className="mono text-sm font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
@@ -711,37 +804,52 @@ export default function StockResearchApp() {
                       {selected?.ticker === s.ticker && (
                         <div className="mt-4 pt-4 border-t border-slate-800/30">
                           {s.aiAnalysis && (
-                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
-                              <h4 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />AI Analysis</h4>
-                              <p className="text-sm text-slate-300 leading-relaxed">{s.aiAnalysis}</p>
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Investment Analysis</h4>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.aiAnalysis}</p>
                             </div>
                           )}
+                          
+                          {i < 3 && !s.aiAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Grok AI analysis will be generated on next scan</p>
+                            </div>
+                          )}
+                          
                           <div className="grid grid-cols-4 gap-4">
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
                               <p className="text-xs text-emerald-400">52-Week Range</p>
                               <p className="text-lg font-bold text-slate-200">${s.low52?.toFixed(2)} - ${s.high52?.toFixed(2)}</p>
-                              <p className="text-[10px] text-slate-500">{s.fromLow?.toFixed(1)}% from low</p>
+                              <p className="text-[10px] text-slate-500">{s.fromLow?.toFixed(1)}% above low • {s.positionIn52Week?.toFixed(0)}% of range</p>
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
                               <p className="text-xs text-violet-400">Net Cash Position</p>
-                              <p className="text-lg font-bold" style={{ color: s.netCash >= 0 ? '#34d399' : '#f87171' }}>{formatMoney(s.netCash)}</p>
-                              <p className="text-[10px] text-slate-500">Cash: {formatMoney(s.cash)} | Debt: {formatMoney(s.debt)}</p>
+                              {s.hasFinancials ? (
+                                <>
+                                  <p className="text-lg font-bold" style={{ color: s.netCash >= 0 ? '#34d399' : '#f87171' }}>{formatMoney(s.netCash)}</p>
+                                  <p className="text-[10px] text-slate-500">Cash: {formatMoney(s.cash)} | Debt: {formatMoney(s.debt)}</p>
+                                </>
+                              ) : (
+                                <p className="text-slate-500 italic">Financial data unavailable</p>
+                              )}
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
                               <p className="text-xs text-emerald-400">Last Insider Purchase</p>
                               {s.lastInsiderPurchase ? (
                                 <>
                                   <p className="text-lg font-bold text-slate-200">{formatMoney(s.lastInsiderPurchase.amount)}</p>
-                                  <p className="text-[10px] text-slate-500">{formatDate(s.lastInsiderPurchase.date)} • {s.lastInsiderPurchase.shares?.toLocaleString()} shares</p>
+                                  <p className="text-[10px] text-slate-500">{formatDate(s.lastInsiderPurchase.date)}</p>
+                                  <p className="text-[10px] text-slate-500">{s.lastInsiderPurchase.shares?.toLocaleString()} shares @ ${s.lastInsiderPurchase.price?.toFixed(2)}</p>
+                                  {s.lastInsiderPurchase.name && <p className="text-[10px] text-slate-400 truncate">by {s.lastInsiderPurchase.name}</p>}
                                 </>
                               ) : (
-                                <p className="text-slate-500">No recent purchases</p>
+                                <p className="text-slate-500 italic">No purchases in past year</p>
                               )}
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
                               <p className="text-xs text-amber-400">RSI ({s.rsi})</p>
-                              <p className="font-semibold text-slate-200">{s.rsi < 30 ? 'Oversold' : s.rsi > 70 ? 'Overbought' : 'Neutral'}</p>
-                              <p className="text-[10px] text-slate-500">14-day RSI indicator</p>
+                              <p className="font-semibold text-slate-200">{s.rsi < 30 ? 'Oversold 🟢' : s.rsi > 70 ? 'Overbought 🔴' : 'Neutral'}</p>
+                              <p className="text-[10px] text-slate-500">14-day relative strength</p>
                             </div>
                           </div>
                         </div>
@@ -754,11 +862,16 @@ export default function StockResearchApp() {
           </div>
         </div>
         
-        {/* Footer with Test Mode Toggle */}
         <footer className="mt-8 pb-8 flex items-center justify-between">
-          <p className="text-xs text-slate-600">ValueHunter AI • Powered by Polygon.io & Finnhub</p>
+          <p className="text-xs text-slate-600">ValueHunter AI • Powered by Polygon.io, Finnhub & xAI Grok</p>
           <button 
-            onClick={() => setTestMode(!testMode)} 
+            onClick={() => {
+              setTestMode(!testMode);
+              localStorage.removeItem(CACHE_KEY);
+              setStocks([]);
+              setScanProgress({ phase: '', current: 0, total: 0, found: 0 });
+              setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
+            }} 
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all"
             style={{ 
               background: testMode ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', 
@@ -767,7 +880,7 @@ export default function StockResearchApp() {
             }}
           >
             <Beaker className="w-4 h-4" />
-            {testMode ? 'Test Mode ON (100 stocks)' : 'Test Mode OFF (Full Scan)'}
+            {testMode ? `Test Mode ON (${TEST_MODE_LIMIT} stocks)` : 'Test Mode OFF (Full Scan)'}
           </button>
         </footer>
       </div>

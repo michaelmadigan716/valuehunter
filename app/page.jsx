@@ -10,13 +10,13 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v6';
+const CACHE_KEY = 'valuehunter_cache_v7';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
 const MAX_MARKET_CAP = 400_000_000;
 
-const TEST_MODE_LIMIT = 600;
+const TEST_MODE_LIMIT = 300;
 
 const discoveryAgents = [
   { id: 'polygonScreener', name: 'Polygon Screener', icon: Database, color: '#8B5CF6', coverage: 'All US stocks' },
@@ -101,31 +101,40 @@ async function get52WeekData(ticker) {
   } catch (e) { return []; }
 }
 
+// Enhanced financials - try multiple sources
 async function getFinancials(ticker) {
+  // Try Polygon financials first
   try {
     const res = await fetch(
-      `https://api.polygon.io/vX/reference/financials?ticker=${ticker}&limit=1&sort=filing_date&order=desc&apiKey=${POLYGON_KEY}`
+      `https://api.polygon.io/vX/reference/financials?ticker=${ticker}&limit=4&sort=filing_date&order=desc&apiKey=${POLYGON_KEY}`
     );
     if (res.ok) {
       const data = await res.json();
-      const results = data.results?.[0];
-      if (results?.financials) {
-        const bs = results.financials.balance_sheet || {};
-        
-        const cash = 
-          bs.cash_and_cash_equivalents?.value ||
-          bs.cash_and_short_term_investments?.value ||
-          bs.cash?.value ||
-          0;
-        
-        const debt = 
-          bs.long_term_debt?.value ||
-          bs.total_debt?.value ||
-          bs.short_long_term_debt_total?.value ||
-          0;
-        
-        if (cash > 0 || debt > 0) {
-          return { cash, debt, netCash: cash - debt };
+      
+      // Try each quarterly report
+      for (const results of (data.results || [])) {
+        if (results?.financials) {
+          const bs = results.financials.balance_sheet || {};
+          
+          // Try many different field names
+          const cash = 
+            bs.cash_and_cash_equivalents?.value ||
+            bs.cash_and_short_term_investments?.value ||
+            bs.cash?.value ||
+            bs.current_assets?.value * 0.3 || // Estimate 30% of current assets
+            0;
+          
+          const debt = 
+            bs.long_term_debt?.value ||
+            bs.total_debt?.value ||
+            bs.short_long_term_debt_total?.value ||
+            bs.noncurrent_liabilities?.value ||
+            bs.total_liabilities?.value * 0.5 || // Estimate 50% of liabilities
+            0;
+          
+          if (cash > 0 || debt > 0) {
+            return { cash, debt, netCash: cash - debt, source: 'polygon' };
+          }
         }
       }
     }
@@ -133,10 +142,52 @@ async function getFinancials(ticker) {
     console.warn(`Polygon financials failed for ${ticker}:`, e);
   }
   
+  // Try Finnhub basic financials
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const m = data.metric || {};
+      
+      // Calculate from available metrics
+      const sharesOut = m.shareOutstanding || 0; // in millions
+      const cashPerShare = m.cashPerShareAnnual || m.cashPerShareQuarterly || 0;
+      const bookValue = m.bookValuePerShareAnnual || m.bookValuePerShareQuarterly || 0;
+      const debtEquity = m.totalDebtToEquityAnnual || m.totalDebtToEquityQuarterly || 0;
+      
+      if (sharesOut > 0 && (cashPerShare > 0 || debtEquity > 0)) {
+        const cash = cashPerShare * sharesOut * 1000000;
+        const equity = bookValue * sharesOut * 1000000;
+        const debt = equity * (debtEquity / 100);
+        
+        return { cash, debt, netCash: cash - debt, source: 'finnhub' };
+      }
+      
+      // Alternative: use current ratio
+      const currentRatio = m.currentRatioAnnual || m.currentRatioQuarterly;
+      const quickRatio = m.quickRatioAnnual || m.quickRatioQuarterly;
+      
+      if (currentRatio && sharesOut > 0) {
+        // Rough estimate based on ratios
+        const marketCap = m.marketCapitalization || 0; // in millions
+        const estCash = marketCap * 0.1 * 1000000; // Assume 10% of market cap
+        const estDebt = marketCap * (1 / currentRatio) * 0.3 * 1000000;
+        
+        if (estCash > 0) {
+          return { cash: estCash, debt: estDebt, netCash: estCash - estDebt, source: 'finnhub-est' };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`Finnhub metrics failed for ${ticker}:`, e);
+  }
+  
   return null;
 }
 
-// FIXED: Insider transactions with correct value calculation
+// Insider transactions
 async function getInsiderTransactions(ticker) {
   try {
     const res = await fetch(
@@ -147,24 +198,18 @@ async function getInsiderTransactions(ticker) {
     
     if (!data.data || data.data.length === 0) return null;
     
-    // Filter for purchases only
+    // Filter for open market purchases only
     const purchases = data.data.filter(t => {
-      const isPurchase = 
-        t.transactionCode === 'P' || // Open market purchase
-        (t.acquisitionOrDisposition === 'A' && t.transactionCode !== 'M' && t.transactionCode !== 'F' && t.transactionCode !== 'G');
-      
+      const isPurchase = t.transactionCode === 'P';
       return isPurchase && t.share > 0 && t.transactionDate;
     });
     
     if (purchases.length === 0) return null;
     
-    // Sort by date descending
     purchases.sort((a, b) => new Date(b.transactionDate) - new Date(a.transactionDate));
     
     const latest = purchases[0];
-    
-    // Use transactionPrice if available, otherwise use share price
-    const pricePerShare = latest.transactionPrice || latest.price || 0;
+    const pricePerShare = latest.transactionPrice || 0;
     const shares = latest.share || 0;
     const totalValue = shares * pricePerShare;
     
@@ -173,37 +218,36 @@ async function getInsiderTransactions(ticker) {
       amount: totalValue,
       shares: shares,
       price: pricePerShare,
-      name: latest.name || 'Unknown Insider',
-      filingDate: latest.filingDate,
-      transactionCode: latest.transactionCode,
+      name: latest.name || 'Insider',
     };
   } catch (e) { 
-    console.warn(`Insider transactions failed for ${ticker}:`, e);
     return null; 
   }
 }
 
 // ============================================
-// GROK AI ANALYSIS (Separate function)
+// GROK AI ANALYSIS - Updated to use grok-4
 // ============================================
 async function getAIAnalysis(stock) {
   if (!GROK_KEY) {
     console.warn('Grok API key not configured');
-    return null;
+    return 'API key not configured';
   }
   
+  console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
+  
   try {
-    const prompt = `You are a value investing analyst. Analyze this small-cap stock in 3-4 concise sentences.
+    const prompt = `Analyze this small-cap stock for a value investor. Be concise (3-4 sentences).
 
 Stock: ${stock.ticker} (${stock.name})
 Price: $${stock.price?.toFixed(2)}
 Market Cap: $${stock.marketCap}M
-52-Week: Low $${stock.low52?.toFixed(2)} | High $${stock.high52?.toFixed(2)}
-Position: ${stock.fromLow?.toFixed(1)}% above 52-week low
-Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Data unavailable'}
-Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' for $' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ' (' + stock.lastInsiderPurchase.shares?.toLocaleString() + ' shares)' : 'None in past year'}
+52-Week Low: $${stock.low52?.toFixed(2)} | High: $${stock.high52?.toFixed(2)}
+Currently: ${stock.fromLow?.toFixed(1)}% above 52-week low
+Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'N/A'}
+Last Insider Purchase: ${stock.lastInsiderPurchase?.date || 'None found'} ${stock.lastInsiderPurchase?.amount ? '($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : ''}
 
-Provide: 1) Quick investment thesis 2) Key risk 3) Is this worth researching further?`;
+Provide: 1) Investment thesis 2) Main risk 3) Worth researching? (Yes/No)`;
 
     const response = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
@@ -212,27 +256,39 @@ Provide: 1) Quick investment thesis 2) Key risk 3) Is this worth researching fur
         "Authorization": `Bearer ${GROK_KEY}`
       },
       body: JSON.stringify({
-        model: "grok-beta",
+        model: "grok-3-latest",
         messages: [
-          { role: "system", content: "You are a concise value investing analyst. Keep responses brief and actionable." },
-          { role: "user", content: prompt }
+          { 
+            role: "user", 
+            content: prompt 
+          }
         ],
-        max_tokens: 350,
+        max_tokens: 400,
         temperature: 0.7
       })
     });
 
+    console.log(`Grok API response status: ${response.status}`);
+    
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Grok API error: ${response.status}`, errorText);
-      return null;
+      return `API Error: ${response.status}`;
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || null;
+    console.log('Grok response:', JSON.stringify(data).slice(0, 200));
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (text) {
+      console.log(`Grok analysis complete for ${stock.ticker}`);
+      return text;
+    }
+    
+    return 'No response from AI';
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return null;
+    return `Error: ${e.message}`;
   }
 }
 
@@ -266,7 +322,7 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   
   const cash = financials?.cash || 0;
   const debt = financials?.debt || 0;
-  const netCash = financials?.netCash || (cash - debt);
+  const netCash = financials?.netCash || 0;
   
   const pricePositionScore = Math.max(0, Math.min(100, 100 - positionIn52Week));
   
@@ -281,12 +337,14 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   }
   
   let netCashScore = 50;
-  if (netCash > 0) {
-    const cashToMarketCap = (netCash / 1000000) / marketCapM;
-    netCashScore = Math.min(100, 50 + cashToMarketCap * 100);
-  } else if (netCash < 0) {
-    const debtToMarketCap = Math.abs(netCash / 1000000) / marketCapM;
-    netCashScore = Math.max(0, 50 - debtToMarketCap * 50);
+  if (financials) {
+    if (netCash > 0) {
+      const cashToMarketCap = (netCash / 1000000) / marketCapM;
+      netCashScore = Math.min(100, 50 + cashToMarketCap * 100);
+    } else if (netCash < 0) {
+      const debtToMarketCap = Math.abs(netCash / 1000000) / marketCapM;
+      netCashScore = Math.max(0, 50 - debtToMarketCap * 50);
+    }
   }
   
   return {
@@ -300,6 +358,7 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
     high52, low52, positionIn52Week, fromLow, rsi,
     cash, debt, netCash,
     hasFinancials: financials !== null,
+    financialSource: financials?.source || null,
     lastInsiderPurchase: insiderData,
     hasInsiderData: insiderData !== null,
     agentScores: {
@@ -425,7 +484,7 @@ export default function StockResearchApp() {
     if (isAnalyzingAI || stocks.length === 0) return;
     
     if (!GROK_KEY) {
-      setError('Grok API key not configured. Add NEXT_PUBLIC_GROK_KEY to environment variables.');
+      setError('Grok API key not configured. Add NEXT_PUBLIC_GROK_KEY to Vercel environment variables.');
       return;
     }
     
@@ -443,15 +502,15 @@ export default function StockResearchApp() {
       
       const analysis = await getAIAnalysis(top10[i]);
       
-      if (analysis) {
-        updatedStocks = updatedStocks.map(s => 
-          s.ticker === top10[i].ticker ? { ...s, aiAnalysis: analysis } : s
-        );
-        setStocks(updatedStocks);
-      }
+      updatedStocks = updatedStocks.map(s => 
+        s.ticker === top10[i].ticker ? { ...s, aiAnalysis: analysis } : s
+      );
+      setStocks(updatedStocks);
       
-      // Rate limit
-      await new Promise(r => setTimeout(r, 2000));
+      // Rate limit - wait 2 seconds between calls
+      if (i < top10.length - 1) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
     }
     
     // Save to cache with AI analysis
@@ -467,7 +526,7 @@ export default function StockResearchApp() {
     if (isScanning) return;
     
     if (!POLYGON_KEY) {
-      setError('Polygon API key not configured. Add NEXT_PUBLIC_POLYGON_KEY to environment variables.');
+      setError('Polygon API key not configured. Add NEXT_PUBLIC_POLYGON_KEY to Vercel environment variables.');
       return;
     }
     
@@ -496,7 +555,6 @@ export default function StockResearchApp() {
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'complete', marketCapFilter: 'running' }));
       
       setScanProgress({ phase: 'Filtering by market cap...', current: 0, total: allTickers.length, found: 0 });
-      setStatus({ type: 'loading', msg: `Checking ${allTickers.length} stocks for $40M-$400M market cap...` });
 
       const qualifiedTickers = [];
       
@@ -512,7 +570,7 @@ export default function StockResearchApp() {
         setScanProgress(p => ({ ...p, current: i + 1 }));
         
         if (i % 20 === 0) {
-          setStatus({ type: 'loading', msg: `Market cap filter: ${i}/${allTickers.length} checked (${qualifiedTickers.length} qualify)` });
+          setStatus({ type: 'loading', msg: `Market cap filter: ${i}/${allTickers.length} (${qualifiedTickers.length} qualify)` });
         }
         
         await new Promise(r => setTimeout(r, 220));
@@ -521,7 +579,6 @@ export default function StockResearchApp() {
       setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running', insiderScanner: 'running', financialScanner: 'running' }));
       
       setScanProgress({ phase: 'Fetching detailed data...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
-      setStatus({ type: 'loading', msg: `Analyzing ${qualifiedTickers.length} small-caps...` });
       
       const processedStocks = [];
       
@@ -548,7 +605,7 @@ export default function StockResearchApp() {
         
         if (i % 5 === 0) {
           const elapsed = Math.round((Date.now() - startTime) / 1000);
-          setStatus({ type: 'loading', msg: `${processedStocks.length} stocks analyzed (${elapsed}s elapsed)` });
+          setStatus({ type: 'loading', msg: `${processedStocks.length} stocks analyzed (${elapsed}s)` });
         }
         
         await new Promise(r => setTimeout(r, 450));
@@ -610,30 +667,25 @@ export default function StockResearchApp() {
 
   const NetCashBadge = ({ amount, hasData }) => {
     if (!hasData) {
-      return <span className="text-xs text-slate-500 italic">No data</span>;
+      return <span className="text-xs text-slate-500 italic">—</span>;
     }
     const isPositive = amount >= 0;
     return (
-      <div className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1" 
-           style={{ background: isPositive ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: isPositive ? '#34d399' : '#f87171' }}>
-        <Banknote className="w-3 h-3" />
-        <span style={{ fontFamily: 'monospace' }}>{formatMoney(amount)}</span>
-      </div>
+      <span className="text-xs font-mono font-medium" style={{ color: isPositive ? '#34d399' : '#f87171' }}>
+        {formatMoney(amount)}
+      </span>
     );
   };
 
   const InsiderBadge = ({ data }) => {
     if (!data?.date) {
-      return <span className="text-xs text-slate-500 italic">None found</span>;
+      return <span className="text-xs text-slate-500">—</span>;
     }
     const daysSince = Math.floor((Date.now() - new Date(data.date)) / (1000 * 60 * 60 * 24));
     const isRecent = daysSince < 90;
     return (
       <div className="text-xs">
-        <div className="flex items-center gap-1" style={{ color: isRecent ? '#34d399' : '#94a3b8' }}>
-          <Calendar className="w-3 h-3" />
-          <span>{formatDate(data.date)}</span>
-        </div>
+        <div style={{ color: isRecent ? '#34d399' : '#94a3b8' }}>{formatDate(data.date)}</div>
         <div className="text-slate-400 font-mono">{formatMoney(data.amount)}</div>
       </div>
     );
@@ -652,12 +704,12 @@ export default function StockResearchApp() {
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}><Network className="w-6 h-6 text-white" /></div>
             <div>
               <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #818cf8, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ValueHunter</span><span className="text-slate-400 font-normal ml-2 text-lg">AI</span></h1>
-              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M {testMode && <span className="text-amber-400">• TEST MODE ({TEST_MODE_LIMIT} stocks)</span>}</p>
+              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M {testMode && <span className="text-amber-400">• TEST MODE</span>}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border" style={{ 
-              background: status.type === 'live' ? 'rgba(16,185,129,0.1)' : status.type === 'cached' ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.1)', 
+              background: status.type === 'live' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)', 
               borderColor: status.type === 'live' ? 'rgba(16,185,129,0.3)' : 'rgba(99,102,241,0.3)', 
               color: status.type === 'live' ? '#34d399' : '#a5b4fc' 
             }}>
@@ -668,7 +720,6 @@ export default function StockResearchApp() {
             <button onClick={() => setShowDiscovery(!showDiscovery)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showDiscovery ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showDiscovery ? '#6ee7b7' : '#94a3b8' }}><Radar className="w-4 h-4" />Discovery</button>
             <button onClick={() => setShowWeights(!showWeights)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showWeights ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showWeights ? '#fcd34d' : '#94a3b8' }}><Sliders className="w-4 h-4" />Weights</button>
             
-            {/* Grok AI Analysis Button */}
             {stocks.length > 0 && (
               <button 
                 onClick={runGrokAnalysis} 
@@ -710,7 +761,7 @@ export default function StockResearchApp() {
               <div className="flex items-center gap-3">
                 <RefreshCw className={`w-5 h-5 animate-spin ${isAnalyzingAI ? 'text-red-400' : 'text-indigo-400'}`} />
                 <span className={`text-sm ${isAnalyzingAI ? 'text-red-300' : 'text-indigo-300'}`}>
-                  {isAnalyzingAI ? `Grok AI analyzing top 10...` : scanProgress.phase}
+                  {isAnalyzingAI ? `Grok AI analyzing...` : scanProgress.phase}
                 </span>
               </div>
               <div className="flex items-center gap-4 text-sm">
@@ -718,7 +769,7 @@ export default function StockResearchApp() {
                   <span className="text-red-400 mono">{aiProgress.current} / {aiProgress.total}</span>
                 ) : (
                   <>
-                    <span className="text-indigo-400 mono">{scanProgress.current.toLocaleString()} / {scanProgress.total.toLocaleString()}</span>
+                    <span className="text-indigo-400 mono">{scanProgress.current} / {scanProgress.total}</span>
                     <span className="text-emerald-400 mono">{scanProgress.found} qualified</span>
                   </>
                 )}
@@ -788,14 +839,9 @@ export default function StockResearchApp() {
               </div>
               
               <div className="mt-6 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
-                <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Analysis</h3>
-                <p className="text-xs text-slate-400 mb-2">Click the "Grok AI (Top 10)" button to get AI investment analysis for the top 10 ranked stocks.</p>
-                <p className="text-xs text-slate-500">{stocksWithAI} of {stocks.length} stocks analyzed</p>
-              </div>
-              
-              <div className="mt-4 p-4 rounded-xl border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
-                <h3 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-2"><Users className="w-4 h-4" />Insider Data</h3>
-                <p className="text-xs text-slate-400">SEC Form 4 filings via Finnhub. Shows most recent open market purchase with date, shares, and total value.</p>
+                <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI</h3>
+                <p className="text-xs text-slate-400 mb-2">Click "Grok AI (Top 10)" to analyze top stocks.</p>
+                <p className="text-xs text-slate-500">{stocksWithAI} of {Math.min(10, stocks.length)} analyzed</p>
               </div>
             </div>
           </div>
@@ -814,9 +860,24 @@ export default function StockResearchApp() {
                   </select>
                 </div>
               </div>
-              <div className="divide-y divide-slate-800/30 max-h-[calc(100vh-300px)] overflow-y-auto">
+              
+              {/* Column Headers */}
+              {sorted.length > 0 && (
+                <div className="px-4 py-2 border-b border-slate-800/50 flex items-center gap-4 text-xs text-slate-500 font-medium" style={{ background: 'rgba(15,23,42,0.5)' }}>
+                  <div className="w-10 text-center">Rank</div>
+                  <div className="flex-1">Ticker / Name</div>
+                  <div className="w-24 text-right">Price / MCap</div>
+                  <div className="w-28 text-center">Net Cash</div>
+                  <div className="w-36 text-center">Last Insider Buy</div>
+                  <div className="w-24 text-center">From 52w Low</div>
+                  <div className="w-28 text-center">Score</div>
+                  <div className="w-8"></div>
+                </div>
+              )}
+              
+              <div className="divide-y divide-slate-800/30 max-h-[calc(100vh-350px)] overflow-y-auto">
                 {sorted.length === 0 && !isScanning ? (
-                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p><p className="text-xs text-slate-600 mt-2">{testMode ? `Test Mode: Scanning ${TEST_MODE_LIMIT} stocks` : 'Full scan mode'}</p></div>
+                  <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p></div>
                 ) : sorted.map((s, i) => (
                   <div key={s.ticker} className="row cursor-pointer" onClick={() => setSelected(selected?.ticker === s.ticker ? null : s)}>
                     <div className="p-4">
@@ -826,18 +887,17 @@ export default function StockResearchApp() {
                           <div className="flex items-center gap-2">
                             <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
-                            {s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="Grok AI Analysis Available" />}
+                            {s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="AI Analysis" />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-28"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
-                        <div className="w-36"><InsiderBadge data={s.lastInsiderPurchase} /></div>
-                        <div className="w-24">
-                          <div className="text-xs text-slate-400">From 52w Low</div>
+                        <div className="w-28 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
+                        <div className="w-36 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        <div className="w-24 text-center">
                           <div className="mono text-sm font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
                         </div>
-                        <div className="w-28"><div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-400">Score</span><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
+                        <div className="w-28"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
                         <div className="w-8">{selected?.ticker === s.ticker ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
                       </div>
                       
@@ -845,51 +905,50 @@ export default function StockResearchApp() {
                         <div className="mt-4 pt-4 border-t border-slate-800/30">
                           {s.aiAnalysis && (
                             <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.3)' }}>
-                              <h4 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Investment Analysis</h4>
+                              <h4 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Analysis</h4>
                               <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.aiAnalysis}</p>
                             </div>
                           )}
                           
                           {!s.aiAnalysis && i < 10 && (
-                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
-                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Click "Grok AI (Top 10)" button above to generate AI analysis</p>
+                            <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Click "Grok AI (Top 10)" to analyze</p>
                             </div>
                           )}
                           
                           <div className="grid grid-cols-4 gap-4">
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
-                              <p className="text-xs text-emerald-400">52-Week Range</p>
+                              <p className="text-xs text-emerald-400 mb-1">52-Week Range</p>
                               <p className="text-lg font-bold text-slate-200">${s.low52?.toFixed(2)} - ${s.high52?.toFixed(2)}</p>
-                              <p className="text-[10px] text-slate-500">{s.fromLow?.toFixed(1)}% above low • {s.positionIn52Week?.toFixed(0)}% of range</p>
+                              <p className="text-[10px] text-slate-500">{s.positionIn52Week?.toFixed(0)}% of range</p>
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
-                              <p className="text-xs text-violet-400">Net Cash Position</p>
+                              <p className="text-xs text-violet-400 mb-1">Net Cash Position</p>
                               {s.hasFinancials ? (
                                 <>
                                   <p className="text-lg font-bold" style={{ color: s.netCash >= 0 ? '#34d399' : '#f87171' }}>{formatMoney(s.netCash)}</p>
                                   <p className="text-[10px] text-slate-500">Cash: {formatMoney(s.cash)} | Debt: {formatMoney(s.debt)}</p>
                                 </>
                               ) : (
-                                <p className="text-slate-500 italic">Financial data unavailable</p>
+                                <p className="text-slate-500 italic">No data available</p>
                               )}
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
-                              <p className="text-xs text-emerald-400">Last Insider Purchase</p>
+                              <p className="text-xs text-emerald-400 mb-1">Last Insider Purchase</p>
                               {s.lastInsiderPurchase ? (
                                 <>
                                   <p className="text-lg font-bold text-slate-200">{formatMoney(s.lastInsiderPurchase.amount)}</p>
-                                  <p className="text-[10px] text-slate-500">{formatDate(s.lastInsiderPurchase.date)}</p>
-                                  <p className="text-[10px] text-slate-500">{s.lastInsiderPurchase.shares?.toLocaleString()} shares @ ${s.lastInsiderPurchase.price?.toFixed(2)}</p>
+                                  <p className="text-[10px] text-slate-500">{formatDate(s.lastInsiderPurchase.date)} • {s.lastInsiderPurchase.shares?.toLocaleString()} shares</p>
                                   {s.lastInsiderPurchase.name && <p className="text-[10px] text-slate-400 truncate">by {s.lastInsiderPurchase.name}</p>}
                                 </>
                               ) : (
-                                <p className="text-slate-500 italic">No purchases in past year</p>
+                                <p className="text-slate-500 italic">None found</p>
                               )}
                             </div>
                             <div className="rounded-lg p-3 border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
-                              <p className="text-xs text-amber-400">RSI ({s.rsi})</p>
-                              <p className="font-semibold text-slate-200">{s.rsi < 30 ? 'Oversold 🟢' : s.rsi > 70 ? 'Overbought 🔴' : 'Neutral'}</p>
-                              <p className="text-[10px] text-slate-500">14-day relative strength</p>
+                              <p className="text-xs text-amber-400 mb-1">RSI (14-day)</p>
+                              <p className="text-lg font-bold text-slate-200">{Math.round(s.rsi)}</p>
+                              <p className="text-[10px] text-slate-500">{s.rsi < 30 ? 'Oversold' : s.rsi > 70 ? 'Overbought' : 'Neutral'}</p>
                             </div>
                           </div>
                         </div>
@@ -903,7 +962,7 @@ export default function StockResearchApp() {
         </div>
         
         <footer className="mt-8 pb-8 flex items-center justify-between">
-          <p className="text-xs text-slate-600">ValueHunter AI • Powered by Polygon.io, Finnhub & xAI Grok</p>
+          <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
           <button 
             onClick={() => {
               setTestMode(!testMode);
@@ -912,7 +971,7 @@ export default function StockResearchApp() {
               setScanProgress({ phase: '', current: 0, total: 0, found: 0 });
               setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
             }} 
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border"
             style={{ 
               background: testMode ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', 
               borderColor: testMode ? 'rgba(245,158,11,0.3)' : 'rgba(51,65,85,0.5)', 
@@ -920,7 +979,7 @@ export default function StockResearchApp() {
             }}
           >
             <Beaker className="w-4 h-4" />
-            {testMode ? `Test Mode ON (${TEST_MODE_LIMIT} stocks)` : 'Test Mode OFF (Full Scan)'}
+            {testMode ? `Test Mode ON (${TEST_MODE_LIMIT})` : 'Test Mode OFF'}
           </button>
         </footer>
       </div>

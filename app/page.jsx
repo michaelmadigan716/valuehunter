@@ -4,11 +4,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar } from 'lucide-react';
 
 // ============================================
-// API CONFIGURATION
+// API CONFIGURATION - Uses environment variables
 // ============================================
-const POLYGON_KEY = 'clWwV5gBj4FG9f5o3M1IlMpp3p_p_vJS';
-const FINNHUB_KEY = 'd5e309hr01qjckl1horgd5e309hr01qjckl1hos0';
-const GROK_KEY = 'xai-pFkSo9qv8nzIX5ttJivZ4zrNBALGkjYsOFu4pysnJvHPQSndBvcBOFcrYwhtveenzO7o6JsfQ28mS66Y';
+const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
+const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
+const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
 const CACHE_KEY = 'valuehunter_cache_v5';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
@@ -201,6 +201,11 @@ async function getInsiderTransactions(ticker) {
 // GROK AI ANALYSIS
 // ============================================
 async function getAIAnalysis(stock) {
+  if (!GROK_KEY) {
+    console.warn('Grok API key not configured');
+    return null;
+  }
+  
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
@@ -441,6 +446,12 @@ export default function StockResearchApp() {
   const runFullScan = async (forceRescan = false) => {
     if (isScanning) return;
     
+    // Check for API keys
+    if (!POLYGON_KEY) {
+      setError('Polygon API key not configured. Add NEXT_PUBLIC_POLYGON_KEY to .env.local');
+      return;
+    }
+    
     if (!forceRescan) {
       const cached = loadFromCache();
       if (cached && cached.stocks?.length > 0) {
@@ -531,25 +542,29 @@ export default function StockResearchApp() {
       setDiscoveryStatus(p => ({ ...p, technicalScanner: 'complete', insiderScanner: 'complete', financialScanner: 'complete', aiAnalyzer: 'running' }));
       
       // Grok AI Analysis for top 3
-      setStatus({ type: 'loading', msg: 'Running Grok AI analysis on top 3 stocks...' });
-      setScanProgress(p => ({ ...p, phase: 'Grok AI analyzing top 3 stocks...' }));
-      
-      const top3 = scoredStocks.slice(0, 3);
-      
-      for (let i = 0; i < top3.length; i++) {
-        setAiProgress({ current: i + 1, total: 3 });
-        setStatus({ type: 'loading', msg: `Grok analyzing ${top3[i].ticker} (${i + 1}/3)...` });
+      if (GROK_KEY) {
+        setStatus({ type: 'loading', msg: 'Running Grok AI analysis on top 3 stocks...' });
+        setScanProgress(p => ({ ...p, phase: 'Grok AI analyzing top 3 stocks...' }));
         
-        const analysis = await getAIAnalysis(top3[i]);
+        const top3 = scoredStocks.slice(0, 3);
         
-        if (analysis) {
-          scoredStocks = scoredStocks.map(s => 
-            s.ticker === top3[i].ticker ? { ...s, aiAnalysis: analysis } : s
-          );
-          setStocks(scoredStocks);
+        for (let i = 0; i < top3.length; i++) {
+          setAiProgress({ current: i + 1, total: 3 });
+          setStatus({ type: 'loading', msg: `Grok analyzing ${top3[i].ticker} (${i + 1}/3)...` });
+          
+          const analysis = await getAIAnalysis(top3[i]);
+          
+          if (analysis) {
+            scoredStocks = scoredStocks.map(s => 
+              s.ticker === top3[i].ticker ? { ...s, aiAnalysis: analysis } : s
+            );
+            setStocks(scoredStocks);
+          }
+          
+          await new Promise(r => setTimeout(r, 1500));
         }
-        
-        await new Promise(r => setTimeout(r, 1500));
+      } else {
+        console.warn('Skipping AI analysis - GROK_KEY not configured');
       }
       
       setDiscoveryStatus(p => ({ ...p, aiAnalyzer: 'complete' }));

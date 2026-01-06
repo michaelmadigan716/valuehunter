@@ -22,7 +22,7 @@ export async function POST(request) {
         messages: [
           { 
             role: "system",
-            content: "You are an elite hedge fund analyst with deep expertise in small-cap value investing. You have access to real-time social sentiment, SEC filings, insider ownership data, analyst reports, and market data. Provide thorough, institutional-quality analysis focused on future upside potential. Be specific with numbers, dates, and sources when possible. Never use markdown formatting like ** or ## - write in clean plain text."
+            content: "You are an elite hedge fund analyst specializing in small-cap value investing. Provide thorough, institutional-quality analysis focused on upside potential and insider conviction. Be specific with numbers and data. Never use markdown formatting like ** or ## - write in clean plain text."
           },
           { 
             role: "user", 
@@ -46,6 +46,14 @@ export async function POST(request) {
     // Clean up any markdown formatting
     text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
     
+    // Extract upside percentage
+    let upsidePct = null;
+    const upsideMatch = text.match(/UPSIDE_PCT:\s*([+-]?\d+)/i);
+    if (upsideMatch) {
+      upsidePct = parseInt(upsideMatch[1]);
+      text = text.replace(/UPSIDE_PCT:\s*[+-]?\d+%?/i, '').trim();
+    }
+    
     // Extract insider conviction score (0-100)
     let insiderConviction = null;
     const convictionMatch = text.match(/INSIDER_CONVICTION:\s*(\d+)/i);
@@ -56,6 +64,7 @@ export async function POST(request) {
     
     return Response.json({ 
       analysis: text || 'No response from AI',
+      upsidePct: upsidePct,
       insiderConviction: insiderConviction
     });
     

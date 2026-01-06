@@ -22,14 +22,14 @@ export async function POST(request) {
         messages: [
           { 
             role: "system",
-            content: "You are an elite hedge fund analyst specializing in small-cap value investing. Provide thorough, institutional-quality analysis focused on upside potential and insider conviction. Be specific with numbers and data. Never use markdown formatting like ** or ## - write in clean plain text."
+            content: "You are an elite hedge fund analyst. Always end your analysis with exactly two lines: UPSIDE_PCT: [number] and INSIDER_CONVICTION: [number]. These are required."
           },
           { 
             role: "user", 
             content: prompt 
           }
         ],
-        max_tokens: 1200,
+        max_tokens: 1000,
         temperature: 0.3
       })
     });
@@ -43,24 +43,52 @@ export async function POST(request) {
     const data = await response.json();
     let text = data.choices?.[0]?.message?.content || '';
     
+    console.log('Raw Grok response (last 200 chars):', text.slice(-200));
+    
     // Clean up any markdown formatting
     text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
     
-    // Extract upside percentage
+    // Extract upside percentage - try multiple patterns
     let upsidePct = null;
-    const upsideMatch = text.match(/UPSIDE_PCT:\s*([+-]?\d+)/i);
-    if (upsideMatch) {
-      upsidePct = parseInt(upsideMatch[1]);
-      text = text.replace(/UPSIDE_PCT:\s*[+-]?\d+%?/i, '').trim();
+    const upsidePatterns = [
+      /UPSIDE_PCT:\s*([+-]?\d+)/i,
+      /UPSIDE_PCT\s*=\s*([+-]?\d+)/i,
+      /UPSIDE[_\s]*PCT[:\s]*([+-]?\d+)/i,
+      /upside[:\s]*([+-]?\d+)\s*%/i
+    ];
+    
+    for (const pattern of upsidePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        upsidePct = parseInt(match[1]);
+        console.log('Found upside:', upsidePct, 'with pattern:', pattern);
+        break;
+      }
     }
     
-    // Extract insider conviction score (0-100)
+    // Extract insider conviction score - try multiple patterns
     let insiderConviction = null;
-    const convictionMatch = text.match(/INSIDER_CONVICTION:\s*(\d+)/i);
-    if (convictionMatch) {
-      insiderConviction = parseInt(convictionMatch[1]);
-      text = text.replace(/INSIDER_CONVICTION:\s*\d+%?/i, '').trim();
+    const convictionPatterns = [
+      /INSIDER_CONVICTION:\s*(\d+)/i,
+      /INSIDER_CONVICTION\s*=\s*(\d+)/i,
+      /INSIDER[_\s]*CONVICTION[:\s]*(\d+)/i,
+      /conviction[:\s]*(\d+)/i
+    ];
+    
+    for (const pattern of convictionPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        insiderConviction = parseInt(match[1]);
+        console.log('Found conviction:', insiderConviction, 'with pattern:', pattern);
+        break;
+      }
     }
+    
+    // Remove the score lines from the analysis text
+    text = text.replace(/UPSIDE_PCT[:\s=]*[+-]?\d+%?/gi, '').trim();
+    text = text.replace(/INSIDER_CONVICTION[:\s=]*\d+%?/gi, '').trim();
+    
+    console.log('Extracted values - upside:', upsidePct, 'conviction:', insiderConviction);
     
     return Response.json({ 
       analysis: text || 'No response from AI',

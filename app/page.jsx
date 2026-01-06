@@ -10,7 +10,7 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v9';
+const CACHE_KEY = 'valuehunter_cache_v10';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
@@ -243,43 +243,28 @@ async function getAIAnalysis(stock) {
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
-    const prompt = `Analyze ${stock.ticker} (${stock.name}) for a value investor seeking high-conviction small-cap opportunities with major upside.
+    const prompt = `Analyze ${stock.ticker} (${stock.name}) for a value investor.
 
-CURRENT DATA:
-- Stock: ${stock.ticker} (${stock.name})
-- Price: $${stock.price?.toFixed(2)}
-- Market Cap: $${stock.marketCap}M
-- 52-Week Range: $${stock.low52?.toFixed(2)} - $${stock.high52?.toFixed(2)}
-- Position: ${stock.fromLow?.toFixed(1)}% above 52-week low
+DATA:
+- Price: $${stock.price?.toFixed(2)} | Market Cap: $${stock.marketCap}M
+- 52-Week: $${stock.low52?.toFixed(2)} (low) - $${stock.high52?.toFixed(2)} (high)
+- Currently ${stock.fromLow?.toFixed(1)}% above 52-week low
 - Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'}
-- Last Insider Purchase: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
+- Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None'}
 
-ANALYZE THE FOLLOWING:
+ANALYZE:
+1. UPSIDE - What catalysts could drive 50-200%+ gains?
+2. INSIDER CONVICTION - What % do insiders own? Are they buying with their own money?
+3. CHART PATTERN - Given the stock is ${stock.fromLow?.toFixed(1)}% above its 52-week low of $${stock.low52?.toFixed(2)} with a high of $${stock.high52?.toFixed(2)}, is this forming a cup and handle pattern (rounded bottom followed by small pullback)?
+4. RISKS - What could go wrong?
+5. VERDICT - Buy or pass?
 
-1. UPSIDE POTENTIAL & CATALYSTS
-What could drive this stock significantly higher? Look for upcoming earnings, FDA decisions, product launches, contracts, M&A potential, or turnaround catalysts. What's the bull case for 50-200%+ gains?
+Write 4-6 sentences. Plain text only, no ** or ## markdown.
 
-2. INSIDER CONVICTION DEEP DIVE
-This is critical. Research insider ownership for ${stock.ticker}:
-- What percentage of the company do insiders own?
-- Have key executives (CEO, CFO, directors) been buying recently with their own money?
-- Estimate what percentage of their personal net worth key insiders might have invested
-- Look for any notable individuals on Stocktwits or Twitter with extreme conviction posting about this stock (ignore general bullish/bearish sentiment scores - only mention if there's someone notable with high conviction)
-
-3. HIDDEN VALUE
-What might the market be missing? Underappreciated assets, growth, or turnaround story?
-
-4. KEY RISKS
-What's the bear case? Dilution, cash burn, competition, regulatory?
-
-5. VERDICT
-Is this a high-conviction buy with significant upside?
-
-Write in plain text, no markdown formatting.
-
-At the end, provide TWO scores on separate lines:
-UPSIDE_PCT: [your estimated percentage upside to fair value, can be negative]
-INSIDER_CONVICTION: [0-100 score where 100 = insiders have massive stakes and actively buying]`;
+END YOUR RESPONSE WITH EXACTLY THESE THREE LINES:
+UPSIDE_PCT: [number, your estimated upside -50 to 200]
+INSIDER_CONVICTION: [number 0-100, where 100 = insiders own huge stakes and buying]
+CUP_HANDLE: [YES or NO]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -294,24 +279,25 @@ INSIDER_CONVICTION: [0-100 score where 100 = insiders have massive stakes and ac
     if (!response.ok) {
       const errorData = await response.json();
       console.error(`Grok API error:`, errorData);
-      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null, upsidePct: null };
+      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null, upsidePct: null, cupHandle: null };
     }
 
     const data = await response.json();
+    console.log(`Grok returned - upside: ${data.upsidePct}, conviction: ${data.insiderConviction}, cupHandle: ${data.cupHandle}`);
     
     if (data.analysis) {
-      console.log(`Grok analysis complete for ${stock.ticker}`);
       return { 
         analysis: data.analysis, 
         insiderConviction: data.insiderConviction,
-        upsidePct: data.upsidePct
+        upsidePct: data.upsidePct,
+        cupHandle: data.cupHandle
       };
     }
     
-    return { analysis: data.error || 'No response from AI', insiderConviction: null, upsidePct: null };
+    return { analysis: data.error || 'No response from AI', insiderConviction: null, upsidePct: null, cupHandle: null };
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null };
+    return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null, cupHandle: null };
   }
 }
 
@@ -550,7 +536,8 @@ export default function StockResearchApp() {
           ...s, 
           aiAnalysis: result.analysis,
           insiderConviction: result.insiderConviction,
-          upsidePct: result.upsidePct
+          upsidePct: result.upsidePct,
+          cupHandle: result.cupHandle
         } : s
       );
       setStocks(updatedStocks);
@@ -945,25 +932,26 @@ export default function StockResearchApp() {
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
                   <div className="w-24 text-right">Price / MCap</div>
-                  <div className="w-28 text-center">Net Cash</div>
+                  <div className="w-24 text-center">Net Cash</div>
                   <div 
-                    className="w-32 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-28 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'insiderDate' ? 'compositeScore' : 'insiderDate')}
                   >
-                    Last Insider Buy
+                    Insider Buy
                     {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-16 text-center">Upside</div>
-                  <div className="w-16 text-center">Convic.</div>
-                  <div className="w-20 text-center">52w Low</div>
+                  <div className="w-14 text-center">Upside</div>
+                  <div className="w-14 text-center">Convic</div>
+                  <div className="w-12 text-center">C&H</div>
+                  <div className="w-16 text-center">52wL</div>
                   <div 
-                    className="w-24 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-20 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy('compositeScore')}
                   >
                     Score
                     {sortBy === 'compositeScore' && <span className="text-indigo-400">↓</span>}
                   </div>
-                  <div className="w-8"></div>
+                  <div className="w-6"></div>
                 </div>
               )}
               
@@ -984,12 +972,12 @@ export default function StockResearchApp() {
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-28 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
-                        <div className="w-32 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
-                        <div className="w-16 text-center">
+                        <div className="w-24 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
+                        <div className="w-28 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        <div className="w-14 text-center">
                           {s.upsidePct !== null && s.upsidePct !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1.5 py-0.5 rounded"
+                              className="text-xs font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.upsidePct >= 50 ? 'rgba(16,185,129,0.2)' : s.upsidePct >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
                                 color: s.upsidePct >= 50 ? '#34d399' : s.upsidePct >= 0 ? '#fbbf24' : '#f87171'
@@ -1001,10 +989,10 @@ export default function StockResearchApp() {
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        <div className="w-16 text-center">
+                        <div className="w-14 text-center">
                           {s.insiderConviction !== null && s.insiderConviction !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1.5 py-0.5 rounded"
+                              className="text-xs font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.insiderConviction >= 70 ? 'rgba(16,185,129,0.2)' : s.insiderConviction >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
                                 color: s.insiderConviction >= 70 ? '#34d399' : s.insiderConviction >= 40 ? '#fbbf24' : '#f87171'
@@ -1016,11 +1004,26 @@ export default function StockResearchApp() {
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        <div className="w-20 text-center">
+                        <div className="w-12 text-center">
+                          {s.cupHandle !== null && s.cupHandle !== undefined ? (
+                            <span 
+                              className="text-xs font-bold px-1.5 py-0.5 rounded"
+                              style={{ 
+                                background: s.cupHandle ? 'rgba(16,185,129,0.2)' : 'rgba(100,116,139,0.2)',
+                                color: s.cupHandle ? '#34d399' : '#64748b'
+                              }}
+                            >
+                              {s.cupHandle ? 'YES' : 'NO'}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        <div className="w-16 text-center">
                           <div className="mono text-xs font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
                         </div>
-                        <div className="w-24"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
-                        <div className="w-8">{selected?.ticker === s.ticker ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
+                        <div className="w-20"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
+                        <div className="w-6">{selected?.ticker === s.ticker ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                       </div>
                       
                       {selected?.ticker === s.ticker && (
@@ -1086,7 +1089,7 @@ export default function StockResearchApp() {
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.3</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.4</span>
           </div>
           <button 
             onClick={() => {

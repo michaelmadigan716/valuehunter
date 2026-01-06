@@ -18,15 +18,19 @@ export async function POST(request) {
         "Authorization": `Bearer ${GROK_KEY}`
       },
       body: JSON.stringify({
-        model: "grok-3",
+        model: "grok-4-fast-reasoning",
         messages: [
+          { 
+            role: "system",
+            content: "You are an elite hedge fund analyst with deep expertise in small-cap value investing. You have access to real-time social sentiment, SEC filings, analyst reports, and market data. Provide thorough, institutional-quality analysis. Be specific with numbers, dates, and sources when possible. Never use markdown formatting like ** or ## - write in clean plain text."
+          },
           { 
             role: "user", 
             content: prompt 
           }
         ],
-        max_tokens: 600,
-        temperature: 0.7
+        max_tokens: 1000,
+        temperature: 0.3
       })
     });
 
@@ -39,15 +43,14 @@ export async function POST(request) {
     const data = await response.json();
     let text = data.choices?.[0]?.message?.content || '';
     
-    // Clean up markdown formatting (remove ** and other markdown)
-    text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '');
+    // Clean up any markdown formatting
+    text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
     
     // Extract upside percentage
     let upsidePct = null;
     const match = text.match(/UPSIDE_PCT:\s*([+-]?\d+)/i);
     if (match) {
       upsidePct = parseInt(match[1]);
-      // Remove the tag from displayed text
       text = text.replace(/UPSIDE_PCT:\s*[+-]?\d+%?/i, '').trim();
     }
     

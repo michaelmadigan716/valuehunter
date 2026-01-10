@@ -381,13 +381,38 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   };
 }
 
-function saveToCache(stocks, scanStats) {
+async function saveToCache(stocks, scanStats) {
+  // Save to localStorage as backup
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stocks, scanStats }));
-  } catch (e) { console.warn('Cache save failed:', e); }
+  } catch (e) { console.warn('localStorage save failed:', e); }
+  
+  // Save to cloud KV
+  try {
+    await fetch('/api/storage/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stocks, scanStats })
+    });
+    console.log('Saved to cloud KV');
+  } catch (e) { console.warn('Cloud save failed:', e); }
 }
 
-function loadFromCache() {
+async function loadFromCloud() {
+  try {
+    const res = await fetch('/api/storage/load');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.stocks && data.stocks.length > 0) {
+        console.log('Loaded from cloud KV:', data.stocks.length, 'stocks');
+        return data;
+      }
+    }
+  } catch (e) { console.warn('Cloud load failed:', e); }
+  return null;
+}
+
+function loadFromLocalCache() {
   try {
     const cached = localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
@@ -493,17 +518,35 @@ export default function StockResearchApp() {
   }, []);
 
   useEffect(() => {
-    const cached = loadFromCache();
-    if (cached && cached.stocks?.length > 0) {
-      const scored = calcScores(cached.stocks, weights);
-      setStocks(scored);
-      setLastUpdate(new Date(cached.timestamp));
-      setCacheAge(getCacheAge());
-      setStatus({ type: 'cached', msg: `${cached.stocks.length} stocks (cached)` });
-      setScanProgress(cached.scanStats || { phase: 'complete', current: 0, total: 0, found: cached.stocks.length });
-    } else {
+    const loadData = async () => {
+      // Try cloud first
+      const cloudData = await loadFromCloud();
+      if (cloudData && cloudData.stocks?.length > 0) {
+        const scored = calcScores(cloudData.stocks, weights);
+        setStocks(scored);
+        setLastUpdate(new Date(cloudData.timestamp));
+        setCacheAge(Date.now() - cloudData.timestamp);
+        setStatus({ type: 'cached', msg: `${cloudData.stocks.length} stocks (cloud)` });
+        setScanProgress(cloudData.scanStats || { phase: 'complete', current: 0, total: 0, found: cloudData.stocks.length });
+        return;
+      }
+      
+      // Fall back to localStorage
+      const localData = loadFromLocalCache();
+      if (localData && localData.stocks?.length > 0) {
+        const scored = calcScores(localData.stocks, weights);
+        setStocks(scored);
+        setLastUpdate(new Date(localData.timestamp));
+        setCacheAge(getCacheAge());
+        setStatus({ type: 'cached', msg: `${localData.stocks.length} stocks (local)` });
+        setScanProgress(localData.scanStats || { phase: 'complete', current: 0, total: 0, found: localData.stocks.length });
+        return;
+      }
+      
       setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
-    }
+    };
+    
+    loadData();
   }, []);
 
   useEffect(() => {
@@ -1089,7 +1132,7 @@ export default function StockResearchApp() {
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.4</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.5</span>
           </div>
           <button 
             onClick={() => {

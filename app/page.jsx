@@ -968,12 +968,12 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         
         const [prevDay, historicalData, financials, insiderData] = await Promise.all([
           getPrevDay(ticker),
-          getHistoricalData(ticker),
+          get52WeekData(ticker),
           getFinancials(ticker),
           getInsiderTransactions(ticker),
         ]);
 
-        if (prevDay && historicalData.length > 0) {
+        if (prevDay && historicalData.length > 20) {
           const stock = processStock(ticker, details, prevDay, historicalData, financials, insiderData, processedStocks.length);
           processedStocks.push(stock);
         }

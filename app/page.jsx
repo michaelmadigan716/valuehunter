@@ -27,7 +27,7 @@ const STOCK_CATEGORIES = {
   biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
   finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
   energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
-  solar: { name: ☀️ Solar Supply Chain', keywords: [], aiTagged: true },
+  solar: { name: '☀️ Solar Supply Chain', keywords: [], aiTagged: true },
   batteries: { name: '🔋 Batteries Supply Chain', keywords: [], aiTagged: true },
   robotics: { name: '🤖 Robotics Supply Chain', keywords: [], aiTagged: true },
 };

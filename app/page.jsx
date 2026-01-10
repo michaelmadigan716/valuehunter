@@ -10,7 +10,7 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v11';
+const CACHE_KEY = 'valuehunter_cache_v12';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
@@ -27,7 +27,7 @@ const STOCK_CATEGORIES = {
   biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
   finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
   energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
-  solar: { name: '☀️ Solar Supply Chain', keywords: [], aiTagged: true },
+  solar: { name: ☀️ Solar Supply Chain', keywords: [], aiTagged: true },
   batteries: { name: '🔋 Batteries Supply Chain', keywords: [], aiTagged: true },
   robotics: { name: '🤖 Robotics Supply Chain', keywords: [], aiTagged: true },
 };
@@ -384,38 +384,13 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   };
 }
 
-async function saveToCache(stocks, scanStats) {
-  // Save to localStorage as backup
+function saveToCache(stocks, scanStats) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stocks, scanStats }));
-  } catch (e) { console.warn('localStorage save failed:', e); }
-  
-  // Save to cloud KV
-  try {
-    await fetch('/api/storage/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stocks, scanStats })
-    });
-    console.log('Saved to cloud KV');
-  } catch (e) { console.warn('Cloud save failed:', e); }
+  } catch (e) { console.warn('Cache save failed:', e); }
 }
 
-async function loadFromCloud() {
-  try {
-    const res = await fetch('/api/storage/load');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.stocks && data.stocks.length > 0) {
-        console.log('Loaded from cloud KV:', data.stocks.length, 'stocks');
-        return data;
-      }
-    }
-  } catch (e) { console.warn('Cloud load failed:', e); }
-  return null;
-}
-
-function loadFromLocalCache() {
+function loadFromCache() {
   try {
     const cached = localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
@@ -507,10 +482,17 @@ export default function StockResearchApp() {
   const [cacheAge, setCacheAge] = useState(null);
   const [testMode, setTestMode] = useState(true);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
-  const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10); // How many stocks to analyze with Grok
+  const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10);
+  const [aiWeights, setAiWeights] = useState({
+    conviction: 20,
+    upside: 20,
+    cupHandle: 10
+  });
 
-  const calcScores = useCallback((list, w) => {
+  const calcScores = useCallback((list, w, aiW) => {
     const total = Object.values(w).reduce((a, b) => a + b, 0);
+    const aw = aiW || { conviction: 20, upside: 20, cupHandle: 10 };
+    
     return list.map(s => {
       // Base score from weights
       let baseScore = 0;
@@ -523,19 +505,19 @@ export default function StockResearchApp() {
       // AI bonus scores (added after Grok analysis)
       let aiBonus = 0;
       
-      // Conviction bonus: up to 20 points
+      // Conviction bonus
       if (s.insiderConviction !== null && s.insiderConviction !== undefined) {
-        aiBonus += (s.insiderConviction / 100) * 20;
+        aiBonus += (s.insiderConviction / 100) * aw.conviction;
       }
       
-      // Upside bonus: up to 20 points (scaled, 100%+ upside = max)
+      // Upside bonus (scaled, 100%+ upside = max)
       if (s.upsidePct !== null && s.upsidePct !== undefined && s.upsidePct > 0) {
-        aiBonus += Math.min(s.upsidePct / 5, 20);
+        aiBonus += Math.min(s.upsidePct / 100, 1) * aw.upside;
       }
       
-      // Cup & Handle bonus: 10 points if yes
+      // Cup & Handle bonus
       if (s.cupHandle === true) {
-        aiBonus += 10;
+        aiBonus += aw.cupHandle;
       }
       
       const finalScore = Math.min(100, baseScore + aiBonus);
@@ -544,35 +526,17 @@ export default function StockResearchApp() {
   }, []);
 
   useEffect(() => {
-    const loadData = async () => {
-      // Try cloud first
-      const cloudData = await loadFromCloud();
-      if (cloudData && cloudData.stocks?.length > 0) {
-        const scored = calcScores(cloudData.stocks, weights);
-        setStocks(scored);
-        setLastUpdate(new Date(cloudData.timestamp));
-        setCacheAge(Date.now() - cloudData.timestamp);
-        setStatus({ type: 'cached', msg: `${cloudData.stocks.length} stocks (cloud)` });
-        setScanProgress(cloudData.scanStats || { phase: 'complete', current: 0, total: 0, found: cloudData.stocks.length });
-        return;
-      }
-      
-      // Fall back to localStorage
-      const localData = loadFromLocalCache();
-      if (localData && localData.stocks?.length > 0) {
-        const scored = calcScores(localData.stocks, weights);
-        setStocks(scored);
-        setLastUpdate(new Date(localData.timestamp));
-        setCacheAge(getCacheAge());
-        setStatus({ type: 'cached', msg: `${localData.stocks.length} stocks (local)` });
-        setScanProgress(localData.scanStats || { phase: 'complete', current: 0, total: 0, found: localData.stocks.length });
-        return;
-      }
-      
+    const cached = loadFromCache();
+    if (cached && cached.stocks?.length > 0) {
+      const scored = calcScores(cached.stocks, weights, aiWeights);
+      setStocks(scored);
+      setLastUpdate(new Date(cached.timestamp));
+      setCacheAge(getCacheAge());
+      setStatus({ type: 'cached', msg: `${cached.stocks.length} stocks (cached)` });
+      setScanProgress(cached.scanStats || { phase: 'complete', current: 0, total: 0, found: cached.stocks.length });
+    } else {
       setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
-    };
-    
-    loadData();
+    }
   }, []);
 
   useEffect(() => {
@@ -618,7 +582,7 @@ export default function StockResearchApp() {
     }
     
     // Recalculate scores with new AI data
-    const reScored = calcScores(updatedStocks, weights);
+    const reScored = calcScores(updatedStocks, weights, aiWeights);
     setStocks(reScored);
     
     // Save to cache with AI analysis
@@ -731,7 +695,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
     if (!forceRescan) {
       const cached = loadFromCache();
       if (cached && cached.stocks?.length > 0) {
-        const scored = calcScores(cached.stocks, weights);
+        const scored = calcScores(cached.stocks, weights, aiWeights);
         setStocks(scored);
         setLastUpdate(new Date(cached.timestamp));
         setStatus({ type: 'cached', msg: `${cached.stocks.length} stocks (cached)` });
@@ -795,7 +759,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
           processedStocks.push(processed);
           
           if (processedStocks.length % 5 === 0) {
-            setStocks(calcScores([...processedStocks], weights));
+            setStocks(calcScores([...processedStocks], weights, aiWeights));
           }
         }
         
@@ -809,7 +773,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         await new Promise(r => setTimeout(r, 450));
       }
 
-      const scoredStocks = calcScores(processedStocks, weights);
+      const scoredStocks = calcScores(processedStocks, weights, aiWeights);
       setStocks(scoredStocks);
 
       setDiscoveryStatus(p => ({ ...p, technicalScanner: 'complete', insiderScanner: 'complete', financialScanner: 'complete' }));
@@ -844,7 +808,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
   const handleWeight = (id, val) => {
     const w = { ...weights, [id]: val };
     setWeights(w);
-    setStocks(p => calcScores(p, w));
+    setStocks(p => calcScores(p, w, aiWeights));
   };
 
   const sorted = [...stocks]
@@ -1066,15 +1030,33 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
           <div className="mb-6 card rounded-2xl border border-slate-800/50 p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold flex items-center gap-2"><Sliders className="w-5 h-5 text-amber-400" />Scoring Weights</h2>
-              <button onClick={() => setWeights({ pricePosition: 40, insiderActivity: 40, netCash: 20 })} className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>Reset</button>
+              <button onClick={() => { setWeights({ pricePosition: 40, insiderActivity: 40, netCash: 20 }); setAiWeights({ conviction: 20, upside: 20, cupHandle: 10 }); }} className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>Reset All</button>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            
+            <p className="text-xs text-slate-500 mb-3">Base Scoring (applied to all stocks)</p>
+            <div className="grid grid-cols-3 gap-4 mb-6">
               {analysisAgents.map(a => (
                 <div key={a.id} className="rounded-xl p-4 border" style={{ background: 'rgba(15,23,42,0.5)', borderColor: 'rgba(51,65,85,0.5)' }}>
                   <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${a.color}20` }}><a.icon className="w-4 h-4" style={{ color: a.color }} /></div><span className="text-sm font-medium text-slate-200">{a.name}</span></div>
                   <div className="flex items-center gap-3"><input type="range" min="0" max="100" value={weights[a.id]} onChange={e => handleWeight(a.id, parseInt(e.target.value))} className="flex-1" style={{ accentColor: a.color }} /><span className="mono text-sm font-semibold w-8 text-right" style={{ color: a.color }}>{weights[a.id]}</span></div>
                 </div>
               ))}
+            </div>
+            
+            <p className="text-xs text-slate-500 mb-3">AI Bonus Points (added after Grok analysis)</p>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}><Users className="w-4 h-4 text-red-400" /></div><span className="text-sm font-medium text-slate-200">Conviction</span></div>
+                <div className="flex items-center gap-3"><input type="range" min="0" max="50" value={aiWeights.conviction} onChange={e => { const v = parseInt(e.target.value); setAiWeights(p => ({...p, conviction: v})); setStocks(s => calcScores(s, weights, {...aiWeights, conviction: v})); }} className="flex-1" style={{ accentColor: '#f87171' }} /><span className="mono text-sm font-semibold w-8 text-right text-red-400">+{aiWeights.conviction}</span></div>
+              </div>
+              <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}><TrendingUp className="w-4 h-4 text-red-400" /></div><span className="text-sm font-medium text-slate-200">Upside %</span></div>
+                <div className="flex items-center gap-3"><input type="range" min="0" max="50" value={aiWeights.upside} onChange={e => { const v = parseInt(e.target.value); setAiWeights(p => ({...p, upside: v})); setStocks(s => calcScores(s, weights, {...aiWeights, upside: v})); }} className="flex-1" style={{ accentColor: '#f87171' }} /><span className="mono text-sm font-semibold w-8 text-right text-red-400">+{aiWeights.upside}</span></div>
+              </div>
+              <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}><BarChart3 className="w-4 h-4 text-red-400" /></div><span className="text-sm font-medium text-slate-200">Cup & Handle</span></div>
+                <div className="flex items-center gap-3"><input type="range" min="0" max="30" value={aiWeights.cupHandle} onChange={e => { const v = parseInt(e.target.value); setAiWeights(p => ({...p, cupHandle: v})); setStocks(s => calcScores(s, weights, {...aiWeights, cupHandle: v})); }} className="flex-1" style={{ accentColor: '#f87171' }} /><span className="mono text-sm font-semibold w-8 text-right text-red-400">+{aiWeights.cupHandle}</span></div>
+              </div>
             </div>
           </div>
         )}
@@ -1307,7 +1289,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.6</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.7</span>
           </div>
           <button 
             onClick={() => {

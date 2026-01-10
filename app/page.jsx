@@ -10,7 +10,7 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v10';
+const CACHE_KEY = 'valuehunter_cache_v11';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
@@ -27,6 +27,9 @@ const STOCK_CATEGORIES = {
   biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
   finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
   energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
+  solar: { name: ☀️ Solar Supply Chain', keywords: [], aiTagged: true },
+  batteries: { name: '🔋 Batteries Supply Chain', keywords: [], aiTagged: true },
+  robotics: { name: '🤖 Robotics Supply Chain', keywords: [], aiTagged: true },
 };
 
 const discoveryAgents = [
@@ -468,18 +471,31 @@ export default function StockResearchApp() {
   const [selected, setSelected] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
+  const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
   const [showWeights, setShowWeights] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
+  const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
+  const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
 
-  // Filter by category keywords
+  // Filter by category keywords or AI tags
   const matchesCategory = (stock, categoryKey) => {
     if (categoryKey === 'all') return true;
     const category = STOCK_CATEGORIES[categoryKey];
     if (!category) return true;
+    
+    // AI-tagged categories (supply chain)
+    if (category.aiTagged) {
+      if (categoryKey === 'solar') return stock.supplyChain?.solar === true;
+      if (categoryKey === 'batteries') return stock.supplyChain?.batteries === true;
+      if (categoryKey === 'robotics') return stock.supplyChain?.robotics === true;
+      return false;
+    }
+    
+    // Keyword-based categories
     const sectorLower = (stock.sector || '').toLowerCase();
     const nameLower = (stock.name || '').toLowerCase();
     return category.keywords.some(kw => sectorLower.includes(kw) || nameLower.includes(kw));
@@ -496,24 +512,34 @@ export default function StockResearchApp() {
   const calcScores = useCallback((list, w) => {
     const total = Object.values(w).reduce((a, b) => a + b, 0);
     return list.map(s => {
-      let sum = 0;
+      // Base score from weights
+      let baseScore = 0;
       Object.keys(w).forEach(id => { 
         if (s.agentScores?.[id] !== undefined) {
-          sum += (s.agentScores[id] * w[id]) / total; 
+          baseScore += (s.agentScores[id] * w[id]) / total; 
         }
       });
       
-      // Add AI-derived scores if available (bonus points)
+      // AI bonus scores (added after Grok analysis)
       let aiBonus = 0;
+      
+      // Conviction bonus: up to 20 points
       if (s.insiderConviction !== null && s.insiderConviction !== undefined) {
-        aiBonus += s.insiderConviction * 0.15; // Up to 15 points from conviction
-      }
-      if (s.upsidePct !== null && s.upsidePct !== undefined && s.upsidePct > 0) {
-        aiBonus += Math.min(s.upsidePct / 2, 15); // Up to 15 points from upside (capped)
+        aiBonus += (s.insiderConviction / 100) * 20;
       }
       
-      const finalScore = Math.min(100, sum + aiBonus);
-      return { ...s, compositeScore: finalScore };
+      // Upside bonus: up to 20 points (scaled, 100%+ upside = max)
+      if (s.upsidePct !== null && s.upsidePct !== undefined && s.upsidePct > 0) {
+        aiBonus += Math.min(s.upsidePct / 5, 20);
+      }
+      
+      // Cup & Handle bonus: 10 points if yes
+      if (s.cupHandle === true) {
+        aiBonus += 10;
+      }
+      
+      const finalScore = Math.min(100, baseScore + aiBonus);
+      return { ...s, compositeScore: finalScore, aiBonus };
     }).sort((a, b) => b.compositeScore - a.compositeScore);
   }, []);
 
@@ -602,6 +628,96 @@ export default function StockResearchApp() {
     setIsAnalyzingAI(false);
     setAiProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
+  };
+
+  // Batch scan for supply chain categorization (20 stocks at a time)
+  const runSupplyChainScan = async () => {
+    if (isScanningSupplyChain || stocks.length === 0) return;
+    
+    setIsScanningSupplyChain(true);
+    setError(null);
+    
+    const batchSize = 20;
+    const totalBatches = Math.ceil(stocks.length / batchSize);
+    setSupplyChainProgress({ current: 0, total: stocks.length });
+    
+    let updatedStocks = [...stocks];
+    
+    for (let batch = 0; batch < totalBatches; batch++) {
+      const startIdx = batch * batchSize;
+      const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
+      
+      setSupplyChainProgress({ current: startIdx, total: stocks.length });
+      setStatus({ type: 'loading', msg: `Categorizing supply chains... ${startIdx}/${stocks.length}` });
+      
+      // Build batch prompt
+      const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown sector'})`).join('\n');
+      
+      const prompt = `Categorize these ${batchStocks.length} stocks into supply chains. For EACH stock, determine if it belongs to:
+- SOLAR: Solar energy, solar panels, inverters, solar installation, photovoltaic, solar materials
+- BATTERIES: Batteries, lithium, energy storage, EV batteries, battery materials, battery tech
+- ROBOTICS: Robotics, automation, AI hardware, industrial robots, drones, autonomous systems
+
+Stocks:
+${stockList}
+
+Respond with ONLY a JSON array, no other text. Each object must have ticker and boolean fields:
+[{"ticker":"ABC","solar":false,"batteries":true,"robotics":false},{"ticker":"XYZ","solar":true,"batteries":false,"robotics":false}]`;
+
+      try {
+        const response = await fetch("/api/grok", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          // Try to parse JSON from response
+          let categories = [];
+          try {
+            // Find JSON array in response
+            const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              categories = JSON.parse(jsonMatch[0]);
+            }
+          } catch (e) {
+            console.warn('Failed to parse supply chain response:', e);
+          }
+          
+          // Update stocks with supply chain tags
+          categories.forEach(cat => {
+            updatedStocks = updatedStocks.map(s => 
+              s.ticker === cat.ticker ? {
+                ...s,
+                supplyChain: {
+                  solar: cat.solar || false,
+                  batteries: cat.batteries || false,
+                  robotics: cat.robotics || false
+                }
+              } : s
+            );
+          });
+          
+          setStocks(updatedStocks);
+        }
+      } catch (e) {
+        console.error('Supply chain batch failed:', e);
+      }
+      
+      // Small delay between batches
+      if (batch < totalBatches - 1) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    
+    // Save updated stocks
+    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
+    saveToCache(updatedStocks, scanStats);
+    
+    setIsScanningSupplyChain(false);
+    setSupplyChainProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Supply chain scan complete` });
   };
 
   const runFullScan = async (forceRescan = false) => {
@@ -733,6 +849,7 @@ export default function StockResearchApp() {
 
   const sorted = [...stocks]
     .filter(s => matchesCategory(s, sectorFilter))
+    .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
     .sort((a, b) => {
       if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
       if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
@@ -740,6 +857,16 @@ export default function StockResearchApp() {
         const dateA = a.lastInsiderPurchase?.date ? new Date(a.lastInsiderPurchase.date).getTime() : 0;
         const dateB = b.lastInsiderPurchase?.date ? new Date(b.lastInsiderPurchase.date).getTime() : 0;
         return dateB - dateA;
+      }
+      if (sortBy === 'upsidePct') {
+        const upsideA = a.upsidePct ?? -999;
+        const upsideB = b.upsidePct ?? -999;
+        return upsideB - upsideA;
+      }
+      if (sortBy === 'insiderConviction') {
+        const convA = a.insiderConviction ?? -1;
+        const convB = b.insiderConviction ?? -1;
+        return convB - convA;
       }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
@@ -821,25 +948,47 @@ export default function StockResearchApp() {
                   <option value={10}>10</option>
                   <option value={25}>25</option>
                   <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                  <option value={500}>500</option>
                   <option value={0}>All</option>
                 </select>
                 
                 {/* Grok AI Button */}
                 <button 
                   onClick={runGrokAnalysis} 
-                  disabled={isAnalyzingAI || isScanning}
+                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
                     background: isAnalyzingAI ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
                     borderColor: 'rgba(239,68,68,0.3)', 
                     color: '#f87171',
-                    opacity: (isAnalyzingAI || isScanning) ? 0.7 : 1
+                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain) ? 0.7 : 1
                   }}
                 >
                   {isAnalyzingAI ? (
                     <><RefreshCw className="w-4 h-4 animate-spin" />Analyzing {aiProgress.current}/{aiProgress.total}...</>
                   ) : (
                     <><Sparkles className="w-4 h-4" />Grok AI</>
+                  )}
+                </button>
+                
+                {/* Supply Chain Scan Button */}
+                <button 
+                  onClick={runSupplyChainScan} 
+                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isScanningSupplyChain ? 'rgba(245,158,11,0.3)' : 'rgba(245,158,11,0.1)', 
+                    borderColor: 'rgba(245,158,11,0.3)', 
+                    color: '#fbbf24',
+                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain) ? 0.7 : 1
+                  }}
+                >
+                  {isScanningSupplyChain ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Tagging {supplyChainProgress.current}/{supplyChainProgress.total}...</>
+                  ) : (
+                    <><Zap className="w-4 h-4" />Tag Supply Chains</>
                   )}
                 </button>
               </>
@@ -955,7 +1104,19 @@ export default function StockResearchApp() {
             <div className="card rounded-2xl border border-slate-800/50 overflow-hidden">
               <div className="p-5 border-b border-slate-800/50 flex items-center justify-between">
                 <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 items-center">
+                  <button 
+                    onClick={() => setHideNetCashNegative(!hideNetCashNegative)}
+                    className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
+                    style={{ 
+                      background: hideNetCashNegative ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', 
+                      borderColor: hideNetCashNegative ? 'rgba(16,185,129,0.5)' : 'rgba(51,65,85,0.5)', 
+                      color: hideNetCashNegative ? '#34d399' : '#94a3b8' 
+                    }}
+                  >
+                    <Banknote className="w-4 h-4" />
+                    {hideNetCashNegative ? 'Net Cash+ Only' : 'All Cash'}
+                  </button>
                   <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
                     {Object.entries(STOCK_CATEGORIES).map(([key, cat]) => (
                       <option key={key} value={key}>{cat.name}</option>
@@ -965,6 +1126,8 @@ export default function StockResearchApp() {
                     <option value="compositeScore">Score</option>
                     <option value="insiderDate">Recent Insider Buys</option>
                     <option value="netCash">Net Cash</option>
+                    <option value="upsidePct">Upside %</option>
+                    <option value="insiderConviction">Conviction</option>
                   </select>
                 </div>
               </div>
@@ -983,8 +1146,20 @@ export default function StockResearchApp() {
                     Insider Buy
                     {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-14 text-center">Upside</div>
-                  <div className="w-14 text-center">Convic</div>
+                  <div 
+                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'upsidePct' ? 'compositeScore' : 'upsidePct')}
+                  >
+                    Upside
+                    {sortBy === 'upsidePct' && <span className="text-emerald-400">↓</span>}
+                  </div>
+                  <div 
+                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'insiderConviction' ? 'compositeScore' : 'insiderConviction')}
+                  >
+                    Convic
+                    {sortBy === 'insiderConviction' && <span className="text-emerald-400">↓</span>}
+                  </div>
                   <div className="w-12 text-center">C&H</div>
                   <div className="w-16 text-center">52wL</div>
                   <div 
@@ -1132,7 +1307,7 @@ export default function StockResearchApp() {
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.5</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.6</span>
           </div>
           <button 
             onClick={() => {

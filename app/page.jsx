@@ -10,13 +10,19 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v13';
+const SESSIONS_KEY = 'valuehunter_sessions';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
 const MAX_MARKET_CAP = 400_000_000;
 
-const TEST_MODE_LIMIT = 100;
+// Stock limit options
+const STOCK_LIMITS = {
+  100: '100 stocks',
+  500: '500 stocks',
+  1000: '1000 stocks',
+  0: 'All stocks'
+};
 
 // Simple category filters
 const STOCK_CATEGORIES = {
@@ -50,11 +56,11 @@ const analysisAgents = [
 // API FUNCTIONS
 // ============================================
 
-async function getFilteredTickers(testMode = false) {
+async function getFilteredTickers(stockLimit = 0) {
   const tickers = [];
   let nextUrl = `https://api.polygon.io/v3/reference/tickers?market=stocks&active=true&limit=1000&apiKey=${POLYGON_KEY}`;
   let pageCount = 0;
-  const maxPages = testMode ? 2 : 100;
+  const maxPages = stockLimit > 0 && stockLimit <= 500 ? 5 : stockLimit <= 1000 ? 10 : 100;
   
   while (nextUrl && pageCount < maxPages) {
     const res = await fetch(nextUrl);
@@ -71,8 +77,8 @@ async function getFilteredTickers(testMode = false) {
       );
       tickers.push(...filtered);
       
-      if (testMode && tickers.length >= TEST_MODE_LIMIT) {
-        return tickers.slice(0, TEST_MODE_LIMIT);
+      if (stockLimit > 0 && tickers.length >= stockLimit) {
+        return tickers.slice(0, stockLimit);
       }
     }
     
@@ -81,7 +87,7 @@ async function getFilteredTickers(testMode = false) {
     await new Promise(r => setTimeout(r, 250));
   }
   
-  return testMode ? tickers.slice(0, TEST_MODE_LIMIT) : tickers;
+  return stockLimit > 0 ? tickers.slice(0, stockLimit) : tickers;
 }
 
 async function getTickerDetails(ticker) {
@@ -409,28 +415,55 @@ function processStock(ticker, details, prevDay, historicalData, financials, insi
   };
 }
 
-function saveToCache(stocks, scanStats) {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stocks, scanStats }));
-  } catch (e) { console.warn('Cache save failed:', e); }
+// Session management functions
+function generateSessionId() {
+  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-function loadFromCache() {
+function saveSession(sessionId, stocks, scanStats, name = null) {
   try {
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (!cached) return null;
-    const data = JSON.parse(cached);
-    if (Date.now() - data.timestamp > CACHE_DURATION) return null;
-    return data;
+    const sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '{}');
+    sessions[sessionId] = {
+      id: sessionId,
+      name: name || new Date().toLocaleString(),
+      timestamp: Date.now(),
+      stocks,
+      scanStats,
+      stockCount: stocks.length
+    };
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+    localStorage.setItem('valuehunter_current_session', sessionId);
+  } catch (e) { console.warn('Session save failed:', e); }
+}
+
+function loadSession(sessionId) {
+  try {
+    const sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '{}');
+    return sessions[sessionId] || null;
   } catch (e) { return null; }
 }
 
-function getCacheAge() {
+function loadCurrentSession() {
   try {
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (!cached) return null;
-    return Date.now() - JSON.parse(cached).timestamp;
+    const currentId = localStorage.getItem('valuehunter_current_session');
+    if (!currentId) return null;
+    return loadSession(currentId);
   } catch (e) { return null; }
+}
+
+function getAllSessions() {
+  try {
+    const sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '{}');
+    return Object.values(sessions).sort((a, b) => b.timestamp - a.timestamp);
+  } catch (e) { return []; }
+}
+
+function deleteSession(sessionId) {
+  try {
+    const sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '{}');
+    delete sessions[sessionId];
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+  } catch (e) { console.warn('Session delete failed:', e); }
 }
 
 function formatCacheAge(ms) {
@@ -472,14 +505,32 @@ export default function StockResearchApp() {
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
+  const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
   const [showWeights, setShowWeights] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
+  const [showFullSpectrumModal, setShowFullSpectrumModal] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
+  
+  // Session management
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  
+  // Scan settings
+  const [stockLimit, setStockLimit] = useState(100);
+  
+  // Full spectrum scan settings
+  const [spectrumSettings, setSpectrumSettings] = useState({
+    baseStockLimit: 500,
+    supplyChainEnabled: true,
+    grokEnabled: true,
+    grokCount: 25
+  });
 
   // Filter by category keywords or AI tags
   const matchesCategory = (stock, categoryKey) => {
@@ -505,7 +556,6 @@ export default function StockResearchApp() {
   const [error, setError] = useState(null);
   const [scanProgress, setScanProgress] = useState({ phase: '', current: 0, total: 0, found: 0 });
   const [cacheAge, setCacheAge] = useState(null);
-  const [testMode, setTestMode] = useState(true);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
   const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10);
   const [aiWeights, setAiWeights] = useState({
@@ -513,6 +563,7 @@ export default function StockResearchApp() {
     upside: 20,
     cupHandle: 20
   });
+  const [fullSpectrumPhase, setFullSpectrumPhase] = useState('');
 
   const calcScores = useCallback((list, w, aiW) => {
     const aw = aiW || { conviction: 20, upside: 20, cupHandle: 20 };
@@ -561,23 +612,33 @@ export default function StockResearchApp() {
   }, []);
 
   useEffect(() => {
-    const cached = loadFromCache();
-    if (cached && cached.stocks?.length > 0) {
-      const scored = calcScores(cached.stocks, weights, aiWeights);
+    // Load sessions list
+    setSessions(getAllSessions());
+    
+    // Try to load current session
+    const currentSession = loadCurrentSession();
+    if (currentSession && currentSession.stocks?.length > 0) {
+      const scored = calcScores(currentSession.stocks, weights, aiWeights);
       setStocks(scored);
-      setLastUpdate(new Date(cached.timestamp));
-      setCacheAge(getCacheAge());
-      setStatus({ type: 'cached', msg: `${cached.stocks.length} stocks (cached)` });
-      setScanProgress(cached.scanStats || { phase: 'complete', current: 0, total: 0, found: cached.stocks.length });
+      setCurrentSessionId(currentSession.id);
+      setLastUpdate(new Date(currentSession.timestamp));
+      setCacheAge(Date.now() - currentSession.timestamp);
+      setStatus({ type: 'cached', msg: `${currentSession.stocks.length} stocks (${currentSession.name})` });
+      setScanProgress(currentSession.scanStats || { phase: 'complete', current: 0, total: 0, found: currentSession.stocks.length });
     } else {
-      setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
+      setStatus({ type: 'ready', msg: 'Click Run Base Scan' });
     }
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => setCacheAge(getCacheAge()), 60000);
+    const interval = setInterval(() => {
+      if (currentSessionId) {
+        const session = loadSession(currentSessionId);
+        if (session) setCacheAge(Date.now() - session.timestamp);
+      }
+    }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentSessionId]);
 
   // Separate Grok AI Analysis function - analyzes in current visible order
   const runGrokAnalysis = async (stocksInOrder) => {
@@ -623,9 +684,12 @@ export default function StockResearchApp() {
     const reScored = calcScores(updatedStocks, weights, aiWeights);
     setStocks(reScored);
     
-    // Save to cache with AI analysis
+    // Save to current session
     const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
-    saveToCache(reScored, scanStats);
+    if (currentSessionId) {
+      saveSession(currentSessionId, reScored, scanStats);
+      setSessions(getAllSessions());
+    }
     
     setIsAnalyzingAI(false);
     setAiProgress({ current: 0, total: 0 });
@@ -713,45 +777,41 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       }
     }
     
-    // Save updated stocks
+    // Save updated stocks to current session
     const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
-    saveToCache(updatedStocks, scanStats);
+    if (currentSessionId) {
+      saveSession(currentSessionId, updatedStocks, scanStats);
+    }
     
     setIsScanningSupplyChain(false);
     setSupplyChainProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Supply chain scan complete` });
   };
 
-  const runFullScan = async (forceRescan = false) => {
+  const runBaseScan = async () => {
     if (isScanning) return;
     
     if (!POLYGON_KEY) {
       setError('Polygon API key not configured. Add NEXT_PUBLIC_POLYGON_KEY to Vercel environment variables.');
       return;
     }
-    
-    if (!forceRescan) {
-      const cached = loadFromCache();
-      if (cached && cached.stocks?.length > 0) {
-        const scored = calcScores(cached.stocks, weights, aiWeights);
-        setStocks(scored);
-        setLastUpdate(new Date(cached.timestamp));
-        setStatus({ type: 'cached', msg: `${cached.stocks.length} stocks (cached)` });
-        return;
-      }
-    }
 
+    // Start new session
+    const newSessionId = generateSessionId();
+    setCurrentSessionId(newSessionId);
+    
     setIsScanning(true);
     setError(null);
     setStocks([]);
     const startTime = Date.now();
 
     try {
-      setStatus({ type: 'loading', msg: testMode ? `Test Mode: Fetching up to ${TEST_MODE_LIMIT} stocks...` : 'Fetching stock list...' });
+      const limitText = stockLimit === 0 ? 'all' : stockLimit;
+      setStatus({ type: 'loading', msg: `Fetching ${limitText} stocks...` });
       setScanProgress({ phase: 'Loading tickers...', current: 0, total: 0, found: 0 });
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'running' }));
       
-      const allTickers = await getFilteredTickers(testMode);
+      const allTickers = await getFilteredTickers(stockLimit);
       setDiscoveryStatus(p => ({ ...p, polygonScreener: 'complete', marketCapFilter: 'running' }));
       
       setScanProgress({ phase: 'Filtering by market cap...', current: 0, total: allTickers.length, found: 0 });
@@ -822,7 +882,11 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
 
       const scanStats = { phase: 'complete', current: allTickers.length, total: allTickers.length, found: scoredStocks.length };
       
-      saveToCache(scoredStocks, scanStats);
+      // Save to session
+      const sessionName = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()} (${scoredStocks.length} stocks)`;
+      saveSession(newSessionId, scoredStocks, scanStats, sessionName);
+      setSessions(getAllSessions());
+      
       setLastUpdate(new Date());
       setCacheAge(0);
       
@@ -841,6 +905,259 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       setDiscoveryStatus(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
       setAnalysisStatus(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
     }, 3000);
+  };
+
+  // Full Spectrum Scan - runs all scans in sequence
+  const runFullSpectrumScan = async () => {
+    if (isScanning || isAnalyzingAI || isScanningSupplyChain) return;
+    
+    setShowFullSpectrumModal(false);
+    setIsRunningFullSpectrum(true);
+    
+    try {
+      // Phase 1: Base Scan
+      setFullSpectrumPhase('Running Base Scan...');
+      const originalStockLimit = stockLimit;
+      setStockLimit(spectrumSettings.baseStockLimit);
+      
+      // Start new session
+      const newSessionId = generateSessionId();
+      setCurrentSessionId(newSessionId);
+      setIsScanning(true);
+      setError(null);
+      setStocks([]);
+      const startTime = Date.now();
+
+      const limitText = spectrumSettings.baseStockLimit === 0 ? 'all' : spectrumSettings.baseStockLimit;
+      setStatus({ type: 'loading', msg: `Full Spectrum: Fetching ${limitText} stocks...` });
+      setScanProgress({ phase: 'Loading tickers...', current: 0, total: 0, found: 0 });
+      setDiscoveryStatus(p => ({ ...p, polygonScreener: 'running' }));
+      
+      const allTickers = await getFilteredTickers(spectrumSettings.baseStockLimit);
+      setDiscoveryStatus(p => ({ ...p, polygonScreener: 'complete', marketCapFilter: 'running' }));
+      
+      setScanProgress({ phase: 'Filtering by market cap...', current: 0, total: allTickers.length, found: 0 });
+
+      const qualifiedTickers = [];
+      const batchSize = 50;
+      for (let i = 0; i < allTickers.length; i += batchSize) {
+        const batch = allTickers.slice(i, i + batchSize);
+        
+        const batchPromises = batch.map(async (tickerData) => {
+          const ticker = tickerData.ticker;
+          const details = await getTickerDetails(ticker);
+          if (!details?.market_cap) return null;
+          if (details.market_cap < MIN_MARKET_CAP || details.market_cap > MAX_MARKET_CAP) return null;
+          return { ticker, details };
+        });
+        
+        const results = await Promise.all(batchPromises);
+        const validResults = results.filter(r => r !== null);
+        qualifiedTickers.push(...validResults);
+        
+        setScanProgress(p => ({ ...p, current: Math.min(i + batchSize, allTickers.length), found: qualifiedTickers.length }));
+        await new Promise(r => setTimeout(r, 220));
+      }
+
+      setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running' }));
+      setScanProgress({ phase: 'Analyzing qualified stocks...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
+
+      const processedStocks = [];
+      for (let i = 0; i < qualifiedTickers.length; i++) {
+        const { ticker, details } = qualifiedTickers[i];
+        
+        const [prevDay, historicalData, financials, insiderData] = await Promise.all([
+          getPrevDay(ticker),
+          getHistoricalData(ticker),
+          getFinancials(ticker),
+          getInsiderTransactions(ticker),
+        ]);
+
+        if (prevDay && historicalData.length > 0) {
+          const stock = processStock(ticker, details, prevDay, historicalData, financials, insiderData, processedStocks.length);
+          processedStocks.push(stock);
+        }
+
+        if (i % 10 === 0) {
+          setScanProgress(p => ({ ...p, current: i, found: processedStocks.length }));
+          setStocks(calcScores([...processedStocks], weights, aiWeights));
+        }
+        await new Promise(r => setTimeout(r, 220));
+      }
+
+      setDiscoveryStatus(p => ({ ...p, technicalScanner: 'complete', insiderScanner: 'complete', financialScanner: 'complete' }));
+      const scoredStocks = calcScores(processedStocks, weights, aiWeights);
+      setStocks(scoredStocks);
+      
+      for (const a of analysisAgents) {
+        setAnalysisStatus(p => ({ ...p, [a.id]: 'complete' }));
+      }
+
+      let currentStocks = scoredStocks;
+      const scanStats = { phase: 'complete', current: allTickers.length, total: allTickers.length, found: scoredStocks.length };
+      
+      setIsScanning(false);
+      
+      // Phase 2: Supply Chain Tagging
+      if (spectrumSettings.supplyChainEnabled && currentStocks.length > 0) {
+        setFullSpectrumPhase('Tagging Supply Chains...');
+        setIsScanningSupplyChain(true);
+        
+        const batchSize = 20;
+        const totalBatches = Math.ceil(currentStocks.length / batchSize);
+        setSupplyChainProgress({ current: 0, total: currentStocks.length });
+        
+        let updatedStocks = [...currentStocks];
+        
+        for (let batch = 0; batch < totalBatches; batch++) {
+          const startIdx = batch * batchSize;
+          const batchStocks = currentStocks.slice(startIdx, startIdx + batchSize);
+          
+          setSupplyChainProgress({ current: startIdx, total: currentStocks.length });
+          setStatus({ type: 'loading', msg: `Full Spectrum: Tagging supply chains... ${startIdx}/${currentStocks.length}` });
+          
+          const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown sector'})`).join('\n');
+          
+          const prompt = `Categorize these ${batchStocks.length} stocks into supply chains. For EACH stock, determine if it belongs to:
+- SOLAR: Solar energy, solar panels, inverters, solar installation, photovoltaic, solar materials
+- BATTERIES: Batteries, lithium, energy storage, EV batteries, battery materials, battery tech
+- ROBOTICS: Robotics, automation, AI hardware, industrial robots, drones, autonomous systems
+
+Stocks:
+${stockList}
+
+Respond with ONLY a JSON array, no other text. Each object must have ticker and boolean fields:
+[{"ticker":"ABC","solar":false,"batteries":true,"robotics":false}]`;
+
+          try {
+            const response = await fetch("/api/grok", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt })
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              let categories = [];
+              try {
+                const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
+                if (jsonMatch) {
+                  categories = JSON.parse(jsonMatch[0]);
+                }
+              } catch (e) {
+                console.warn('Failed to parse supply chain response:', e);
+              }
+              
+              categories.forEach(cat => {
+                updatedStocks = updatedStocks.map(s => 
+                  s.ticker === cat.ticker ? {
+                    ...s,
+                    supplyChain: {
+                      solar: cat.solar || false,
+                      batteries: cat.batteries || false,
+                      robotics: cat.robotics || false
+                    }
+                  } : s
+                );
+              });
+              
+              setStocks(updatedStocks);
+            }
+          } catch (e) {
+            console.error('Supply chain batch failed:', e);
+          }
+          
+          if (batch < totalBatches - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        
+        currentStocks = updatedStocks;
+        setIsScanningSupplyChain(false);
+        setSupplyChainProgress({ current: 0, total: 0 });
+      }
+      
+      // Phase 3: Grok AI Analysis
+      if (spectrumSettings.grokEnabled && currentStocks.length > 0 && spectrumSettings.grokCount > 0) {
+        setFullSpectrumPhase('Running Grok AI Analysis...');
+        setIsAnalyzingAI(true);
+        
+        const countToAnalyze = Math.min(spectrumSettings.grokCount, currentStocks.length);
+        const stocksToAnalyze = currentStocks.slice(0, countToAnalyze);
+        setAiProgress({ current: 0, total: stocksToAnalyze.length });
+        
+        let updatedStocks = [...currentStocks];
+        
+        for (let i = 0; i < stocksToAnalyze.length; i++) {
+          setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
+          setStatus({ type: 'loading', msg: `Full Spectrum: Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+          
+          const result = await getAIAnalysis(stocksToAnalyze[i]);
+          
+          updatedStocks = updatedStocks.map(s => 
+            s.ticker === stocksToAnalyze[i].ticker ? { 
+              ...s, 
+              aiAnalysis: result.analysis,
+              insiderConviction: result.insiderConviction,
+              upsidePct: result.upsidePct,
+              cupHandleScore: result.cupHandleScore
+            } : s
+          );
+          setStocks(updatedStocks);
+          
+          if (i < stocksToAnalyze.length - 1) {
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+        
+        const reScored = calcScores(updatedStocks, weights, aiWeights);
+        setStocks(reScored);
+        currentStocks = reScored;
+        
+        setIsAnalyzingAI(false);
+        setAiProgress({ current: 0, total: 0 });
+      }
+      
+      // Save final session
+      const finalScanStats = { phase: 'complete', current: allTickers.length, total: allTickers.length, found: currentStocks.length };
+      const sessionName = `Full Spectrum ${new Date().toLocaleDateString()} (${currentStocks.length} stocks)`;
+      saveSession(newSessionId, currentStocks, finalScanStats, sessionName);
+      setSessions(getAllSessions());
+      
+      setLastUpdate(new Date());
+      setCacheAge(0);
+      
+      const totalTime = Math.round((Date.now() - startTime) / 1000);
+      setStatus({ type: 'live', msg: `Full Spectrum complete: ${currentStocks.length} stocks (${totalTime}s)` });
+      
+    } catch (err) {
+      console.error('Full spectrum scan error:', err);
+      setError(`Full spectrum scan failed: ${err.message}`);
+      setStatus({ type: 'error', msg: 'Scan failed' });
+    }
+    
+    setIsRunningFullSpectrum(false);
+    setFullSpectrumPhase('');
+    setTimeout(() => {
+      setDiscoveryStatus(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
+      setAnalysisStatus(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
+    }, 3000);
+  };
+  
+  // Load a previous session
+  const loadPreviousSession = (sessionId) => {
+    const session = loadSession(sessionId);
+    if (session && session.stocks?.length > 0) {
+      const scored = calcScores(session.stocks, weights, aiWeights);
+      setStocks(scored);
+      setCurrentSessionId(session.id);
+      setLastUpdate(new Date(session.timestamp));
+      setCacheAge(Date.now() - session.timestamp);
+      setStatus({ type: 'cached', msg: `${session.stocks.length} stocks (${session.name})` });
+      setScanProgress(session.scanStats || { phase: 'complete', current: 0, total: 0, found: session.stocks.length });
+      setShowSessions(false);
+      localStorage.setItem('valuehunter_current_session', sessionId);
+    }
   };
 
   const handleWeight = (id, val) => {
@@ -926,7 +1243,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}><Network className="w-6 h-6 text-white" /></div>
             <div>
               <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #818cf8, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ValueHunter</span><span className="text-slate-400 font-normal ml-2 text-lg">AI</span></h1>
-              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M {testMode && <span className="text-amber-400">• TEST MODE</span>}</p>
+              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -935,10 +1252,14 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               borderColor: status.type === 'live' ? 'rgba(16,185,129,0.3)' : 'rgba(99,102,241,0.3)', 
               color: status.type === 'live' ? '#34d399' : '#a5b4fc' 
             }}>
-              {(status.type === 'loading' || isAnalyzingAI) ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
-              <span>{status.msg}</span>
+              {(status.type === 'loading' || isAnalyzingAI || isRunningFullSpectrum) ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+              <span>{fullSpectrumPhase || status.msg}</span>
               {cacheAge && status.type === 'cached' && <span className="text-slate-500">• {formatCacheAge(cacheAge)}</span>}
             </div>
+            
+            {/* Sessions Button */}
+            <button onClick={() => setShowSessions(!showSessions)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showSessions ? 'rgba(139,92,246,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showSessions ? '#a78bfa' : '#94a3b8' }}><Clock className="w-4 h-4" />Sessions ({sessions.length})</button>
+            
             <button onClick={() => setShowDiscovery(!showDiscovery)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showDiscovery ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showDiscovery ? '#6ee7b7' : '#94a3b8' }}><Radar className="w-4 h-4" />Discovery</button>
             <button onClick={() => setShowWeights(!showWeights)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showWeights ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showWeights ? '#fcd34d' : '#94a3b8' }}><Sliders className="w-4 h-4" />Weights</button>
             
@@ -1019,17 +1340,190 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               </>
             )}
             
-            {!isScanning && stocks.length > 0 && (
-              <button onClick={() => runFullScan(true)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}>
-                <RotateCcw className="w-4 h-4" />Rescan
-              </button>
-            )}
-            <button onClick={() => runFullScan(stocks.length === 0)} disabled={isScanning} className="px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" style={{ background: isScanning ? 'rgba(245,158,11,0.2)' : 'linear-gradient(90deg, #6366f1, #8b5cf6)', color: isScanning ? '#fcd34d' : 'white' }}>
-              {isScanning ? <><RefreshCw className="w-4 h-4 animate-spin" />Scanning...</> : <><Play className="w-4 h-4" />Run Full Scan</>}
+            {/* Stock Limit Selector */}
+            <select 
+              value={stockLimit} 
+              onChange={e => setStockLimit(parseInt(e.target.value))}
+              className="rounded-lg px-2 py-2 text-sm border outline-none"
+              style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(99,102,241,0.3)', color: '#a5b4fc', width: '100px' }}
+              disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum}
+            >
+              <option value={100}>100 stocks</option>
+              <option value={500}>500 stocks</option>
+              <option value={1000}>1000 stocks</option>
+              <option value={0}>All stocks</option>
+            </select>
+            
+            {/* Run Base Scan Button */}
+            <button 
+              onClick={runBaseScan} 
+              disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum} 
+              className="px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" 
+              style={{ background: isScanning ? 'rgba(245,158,11,0.2)' : 'linear-gradient(90deg, #6366f1, #8b5cf6)', color: isScanning ? '#fcd34d' : 'white', opacity: (isAnalyzingAI || isRunningFullSpectrum) ? 0.5 : 1 }}
+            >
+              {isScanning && !isRunningFullSpectrum ? <><RefreshCw className="w-4 h-4 animate-spin" />Scanning...</> : <><Play className="w-4 h-4" />Run Base Scan</>}
+            </button>
+            
+            {/* Run Full Spectrum Button */}
+            <button 
+              onClick={() => setShowFullSpectrumModal(true)} 
+              disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum} 
+              className="px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" 
+              style={{ background: isRunningFullSpectrum ? 'rgba(245,158,11,0.2)' : 'linear-gradient(90deg, #f59e0b, #f97316)', color: isRunningFullSpectrum ? '#fcd34d' : 'white', opacity: (isScanning || isAnalyzingAI) && !isRunningFullSpectrum ? 0.5 : 1 }}
+            >
+              {isRunningFullSpectrum ? <><RefreshCw className="w-4 h-4 animate-spin" />Running...</> : <><Zap className="w-4 h-4" />Run Full Spectrum</>}
             </button>
           </div>
         </div>
       </header>
+
+      {/* Full Spectrum Modal */}
+      {showFullSpectrumModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="card rounded-2xl border border-slate-700 p-6 w-full max-w-md mx-4" style={{ background: 'rgba(15,23,42,0.98)' }}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2"><Zap className="w-6 h-6 text-amber-400" />Full Spectrum Scan</h2>
+              <button onClick={() => setShowFullSpectrumModal(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <p className="text-sm text-slate-400 mb-6">This will run all scans in sequence: Base Scan → Supply Chain Tagging → Grok AI Analysis</p>
+            
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="text-sm text-slate-300 mb-2 block">Base Scan Stock Limit</label>
+                <select 
+                  value={spectrumSettings.baseStockLimit} 
+                  onChange={e => setSpectrumSettings(p => ({...p, baseStockLimit: parseInt(e.target.value)}))}
+                  className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                  style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(99,102,241,0.3)', color: '#cbd5e1' }}
+                >
+                  <option value={100}>100 stocks</option>
+                  <option value={500}>500 stocks</option>
+                  <option value={1000}>1000 stocks</option>
+                  <option value={0}>All stocks</option>
+                </select>
+              </div>
+              
+              <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <span className="text-sm text-slate-200">Tag Supply Chains</span>
+                </div>
+                <button 
+                  onClick={() => setSpectrumSettings(p => ({...p, supplyChainEnabled: !p.supplyChainEnabled}))}
+                  className="w-12 h-6 rounded-full transition-colors"
+                  style={{ background: spectrumSettings.supplyChainEnabled ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                >
+                  <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: spectrumSettings.supplyChainEnabled ? 'translateX(26px)' : 'translateX(2px)' }} />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-red-400" />
+                  <span className="text-sm text-slate-200">Grok AI Analysis</span>
+                </div>
+                <button 
+                  onClick={() => setSpectrumSettings(p => ({...p, grokEnabled: !p.grokEnabled}))}
+                  className="w-12 h-6 rounded-full transition-colors"
+                  style={{ background: spectrumSettings.grokEnabled ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                >
+                  <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: spectrumSettings.grokEnabled ? 'translateX(26px)' : 'translateX(2px)' }} />
+                </button>
+              </div>
+              
+              {spectrumSettings.grokEnabled && (
+                <div>
+                  <label className="text-sm text-slate-300 mb-2 block">Grok AI - Stocks to Analyze</label>
+                  <select 
+                    value={spectrumSettings.grokCount} 
+                    onChange={e => setSpectrumSettings(p => ({...p, grokCount: parseInt(e.target.value)}))}
+                    className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                    style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}
+                  >
+                    <option value={10}>Top 10</option>
+                    <option value={25}>Top 25</option>
+                    <option value={50}>Top 50</option>
+                    <option value={100}>Top 100</option>
+                    <option value={0}>All stocks</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setShowFullSpectrumModal(false)} 
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium border"
+                style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={runFullSpectrumScan} 
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2"
+                style={{ background: 'linear-gradient(90deg, #f59e0b, #f97316)', color: 'white' }}
+              >
+                <Play className="w-4 h-4" />Start Full Spectrum
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sessions Panel */}
+      {showSessions && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="card rounded-2xl border border-slate-700 p-6 w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col" style={{ background: 'rgba(15,23,42,0.98)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2"><Clock className="w-6 h-6 text-violet-400" />Saved Sessions</h2>
+              <button onClick={() => setShowSessions(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {sessions.length === 0 ? (
+                <p className="text-center text-slate-500 py-8">No saved sessions yet. Run a scan to create one.</p>
+              ) : sessions.map(session => (
+                <div 
+                  key={session.id} 
+                  className="p-3 rounded-xl border cursor-pointer hover:border-violet-500/50 transition-colors"
+                  style={{ 
+                    background: currentSessionId === session.id ? 'rgba(139,92,246,0.1)' : 'rgba(30,41,59,0.5)', 
+                    borderColor: currentSessionId === session.id ? 'rgba(139,92,246,0.5)' : 'rgba(51,65,85,0.5)' 
+                  }}
+                  onClick={() => loadPreviousSession(session.id)}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-200">{session.name}</p>
+                      <p className="text-xs text-slate-500">{session.stockCount} stocks • {formatCacheAge(Date.now() - session.timestamp)}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {currentSessionId === session.id && <span className="text-xs text-violet-400">Current</span>}
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); deleteSession(session.id); setSessions(getAllSessions()); }}
+                        className="text-slate-500 hover:text-red-400 p-1"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-slate-700">
+              <button 
+                onClick={() => setShowSessions(false)} 
+                className="w-full px-4 py-2.5 rounded-xl text-sm font-medium border"
+                style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-[1800px] mx-auto px-6 py-6 min-h-screen">
         {error && <div className="mb-4 p-4 rounded-xl border flex items-center gap-3" style={{ background: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.3)' }}><AlertCircle className="w-5 h-5 text-red-400" /><p className="text-sm text-red-300 flex-1">{error}</p><button onClick={() => setError(null)} className="text-red-400"><X className="w-4 h-4" /></button></div>}
@@ -1356,26 +1850,12 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.8</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.9</span>
           </div>
-          <button 
-            onClick={() => {
-              setTestMode(!testMode);
-              localStorage.removeItem(CACHE_KEY);
-              setStocks([]);
-              setScanProgress({ phase: '', current: 0, total: 0, found: 0 });
-              setStatus({ type: 'ready', msg: 'Click Run Full Scan' });
-            }} 
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border"
-            style={{ 
-              background: testMode ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', 
-              borderColor: testMode ? 'rgba(245,158,11,0.3)' : 'rgba(51,65,85,0.5)', 
-              color: testMode ? '#fcd34d' : '#64748b' 
-            }}
-          >
-            <Beaker className="w-4 h-4" />
-            {testMode ? `Test Mode ON (${TEST_MODE_LIMIT})` : 'Test Mode OFF'}
-          </button>
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span>Stock Limit: {stockLimit === 0 ? 'All' : stockLimit}</span>
+            {currentSessionId && <span>• Session Active</span>}
+          </div>
         </footer>
       </div>
     </div>

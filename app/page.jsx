@@ -1078,11 +1078,14 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       }
       
       // Phase 3: Grok AI Analysis
-      if (spectrumSettings.grokEnabled && currentStocks.length > 0 && spectrumSettings.grokCount > 0) {
+      if (spectrumSettings.grokEnabled && currentStocks.length > 0) {
         setFullSpectrumPhase('Running Grok AI Analysis...');
         setIsAnalyzingAI(true);
         
-        const countToAnalyze = Math.min(spectrumSettings.grokCount, currentStocks.length);
+        // grokCount of 0 means "all stocks"
+        const countToAnalyze = spectrumSettings.grokCount === 0 
+          ? currentStocks.length 
+          : Math.min(spectrumSettings.grokCount, currentStocks.length);
         const stocksToAnalyze = currentStocks.slice(0, countToAnalyze);
         setAiProgress({ current: 0, total: stocksToAnalyze.length });
         

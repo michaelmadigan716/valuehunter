@@ -10,7 +10,7 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const CACHE_KEY = 'valuehunter_cache_v12';
+const CACHE_KEY = 'valuehunter_cache_v13';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
@@ -246,28 +246,53 @@ async function getAIAnalysis(stock) {
   console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
   
   try {
-    const prompt = `Analyze ${stock.ticker} (${stock.name}) for a value investor.
+    // Calculate price position metrics for cup & handle analysis
+    const priceRange = stock.high52 - stock.low52;
+    const currentPosition = ((stock.price - stock.low52) / priceRange * 100).toFixed(1);
+    
+    const prompt = `Analyze ${stock.ticker} (${stock.name}) for a value investor seeking 50-200%+ gains.
 
-DATA:
-- Price: $${stock.price?.toFixed(2)} | Market Cap: $${stock.marketCap}M
-- 52-Week: $${stock.low52?.toFixed(2)} (low) - $${stock.high52?.toFixed(2)} (high)
-- Currently ${stock.fromLow?.toFixed(1)}% above 52-week low
+STOCK DATA:
+- Current Price: $${stock.price?.toFixed(2)}
+- Market Cap: $${stock.marketCap}M
+- 52-Week Low: $${stock.low52?.toFixed(2)}
+- 52-Week High: $${stock.high52?.toFixed(2)}
+- Current position: ${currentPosition}% of 52-week range (0% = at low, 100% = at high)
+- Distance from low: +${stock.fromLow?.toFixed(1)}%
 - Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'}
-- Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None'}
+- Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
 
-ANALYZE:
-1. UPSIDE - What catalysts could drive 50-200%+ gains?
-2. INSIDER CONVICTION - What % do insiders own? Are they buying with their own money?
-3. CHART PATTERN - Given the stock is ${stock.fromLow?.toFixed(1)}% above its 52-week low of $${stock.low52?.toFixed(2)} with a high of $${stock.high52?.toFixed(2)}, is this forming a cup and handle pattern (rounded bottom followed by small pullback)?
-4. RISKS - What could go wrong?
-5. VERDICT - Buy or pass?
+ANALYZE THESE 4 AREAS:
 
-Write 4-6 sentences. Plain text only, no ** or ## markdown.
+1. UPSIDE POTENTIAL: What catalysts could drive major gains? Earnings, contracts, FDA, M&A?
 
-END YOUR RESPONSE WITH EXACTLY THESE THREE LINES:
-UPSIDE_PCT: [number, your estimated upside -50 to 200]
-INSIDER_CONVICTION: [number 0-100, where 100 = insiders own huge stakes and buying]
-CUP_HANDLE: [YES or NO]`;
+2. INSIDER CONVICTION: What percentage do insiders own? Have they been buying recently?
+
+3. CUP AND HANDLE PATTERN ANALYSIS:
+Look at the price data carefully. A perfect cup and handle has:
+- A rounded "U" shaped bottom (not V-shaped) forming the cup
+- Price recovered 50-100% of the prior decline
+- A small pullback forming the handle (10-15% from cup high)
+- Handle should be in upper half of the cup
+- Current price near the breakout point (top of cup)
+
+Based on the data: The stock is at ${currentPosition}% of its 52-week range, ${stock.fromLow?.toFixed(1)}% above its low.
+
+Rate how well this fits a cup and handle pattern from 0-100:
+- 0-20: No cup and handle pattern present
+- 21-40: Vague resemblance but missing key elements  
+- 41-60: Partial pattern, some elements present
+- 61-80: Good cup and handle forming, most elements present
+- 81-100: Textbook cup and handle, ready for breakout
+
+4. KEY RISKS: What could go wrong?
+
+Write 4-6 sentences analysis. Plain text only.
+
+END WITH EXACTLY THESE THREE LINES:
+UPSIDE_PCT: [number from -50 to 200]
+INSIDER_CONVICTION: [number from 0 to 100]
+CUP_HANDLE_SCORE: [number from 0 to 100]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -282,25 +307,25 @@ CUP_HANDLE: [YES or NO]`;
     if (!response.ok) {
       const errorData = await response.json();
       console.error(`Grok API error:`, errorData);
-      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null, upsidePct: null, cupHandle: null };
+      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null, upsidePct: null, cupHandleScore: null };
     }
 
     const data = await response.json();
-    console.log(`Grok returned - upside: ${data.upsidePct}, conviction: ${data.insiderConviction}, cupHandle: ${data.cupHandle}`);
+    console.log(`Grok returned - upside: ${data.upsidePct}, conviction: ${data.insiderConviction}, cupHandleScore: ${data.cupHandleScore}`);
     
     if (data.analysis) {
       return { 
         analysis: data.analysis, 
         insiderConviction: data.insiderConviction,
         upsidePct: data.upsidePct,
-        cupHandle: data.cupHandle
+        cupHandleScore: data.cupHandleScore
       };
     }
     
-    return { analysis: data.error || 'No response from AI', insiderConviction: null, upsidePct: null, cupHandle: null };
+    return { analysis: data.error || 'No response from AI', insiderConviction: null, upsidePct: null, cupHandleScore: null };
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
-    return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null, cupHandle: null };
+    return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null, cupHandleScore: null };
   }
 }
 
@@ -486,42 +511,52 @@ export default function StockResearchApp() {
   const [aiWeights, setAiWeights] = useState({
     conviction: 20,
     upside: 20,
-    cupHandle: 10
+    cupHandle: 20
   });
 
   const calcScores = useCallback((list, w, aiW) => {
-    const total = Object.values(w).reduce((a, b) => a + b, 0);
-    const aw = aiW || { conviction: 20, upside: 20, cupHandle: 10 };
+    const aw = aiW || { conviction: 20, upside: 20, cupHandle: 20 };
+    
+    // Calculate total weight (base + AI)
+    const baseTotal = Object.values(w).reduce((a, b) => a + b, 0);
+    const aiTotal = aw.conviction + aw.upside + aw.cupHandle;
+    const grandTotal = baseTotal + aiTotal;
+    
+    // If all weights are 0, just return unsorted
+    if (grandTotal === 0) {
+      return list.map(s => ({ ...s, compositeScore: 50 }));
+    }
     
     return list.map(s => {
-      // Base score from weights
-      let baseScore = 0;
-      Object.keys(w).forEach(id => { 
-        if (s.agentScores?.[id] !== undefined) {
-          baseScore += (s.agentScores[id] * w[id]) / total; 
-        }
-      });
+      let score = 0;
       
-      // AI bonus scores (added after Grok analysis)
-      let aiBonus = 0;
-      
-      // Conviction bonus
-      if (s.insiderConviction !== null && s.insiderConviction !== undefined) {
-        aiBonus += (s.insiderConviction / 100) * aw.conviction;
+      // Base scores (pricePosition, insiderActivity, netCash)
+      if (baseTotal > 0) {
+        Object.keys(w).forEach(id => { 
+          if (s.agentScores?.[id] !== undefined && w[id] > 0) {
+            // Each component contributes proportionally to its weight
+            score += (s.agentScores[id] / 100) * (w[id] / grandTotal) * 100;
+          }
+        });
       }
       
-      // Upside bonus (scaled, 100%+ upside = max)
-      if (s.upsidePct !== null && s.upsidePct !== undefined && s.upsidePct > 0) {
-        aiBonus += Math.min(s.upsidePct / 100, 1) * aw.upside;
+      // AI scores - Conviction (0-100 scale)
+      if (aw.conviction > 0 && s.insiderConviction !== null && s.insiderConviction !== undefined) {
+        score += (s.insiderConviction / 100) * (aw.conviction / grandTotal) * 100;
       }
       
-      // Cup & Handle bonus
-      if (s.cupHandle === true) {
-        aiBonus += aw.cupHandle;
+      // AI scores - Upside (normalize: 100%+ upside = max score)
+      if (aw.upside > 0 && s.upsidePct !== null && s.upsidePct !== undefined) {
+        const upsideNormalized = Math.max(0, Math.min(s.upsidePct / 100, 1)); // 0-100% maps to 0-1
+        score += upsideNormalized * (aw.upside / grandTotal) * 100;
       }
       
-      const finalScore = Math.min(100, baseScore + aiBonus);
-      return { ...s, compositeScore: finalScore, aiBonus };
+      // AI scores - Cup & Handle (0-100 scale now)
+      if (aw.cupHandle > 0 && s.cupHandleScore !== null && s.cupHandleScore !== undefined) {
+        score += (s.cupHandleScore / 100) * (aw.cupHandle / grandTotal) * 100;
+      }
+      
+      return { ...s, compositeScore: Math.min(100, Math.max(0, score)) };
     }).sort((a, b) => b.compositeScore - a.compositeScore);
   }, []);
 
@@ -544,16 +579,19 @@ export default function StockResearchApp() {
     return () => clearInterval(interval);
   }, []);
 
-  // Separate Grok AI Analysis function
-  const runGrokAnalysis = async () => {
+  // Separate Grok AI Analysis function - analyzes in current visible order
+  const runGrokAnalysis = async (stocksInOrder) => {
     if (isAnalyzingAI || stocks.length === 0) return;
     
     setIsAnalyzingAI(true);
     setError(null);
     
-    // Use aiAnalyzeCount, or all stocks if set to 0 or 'all'
-    const countToAnalyze = aiAnalyzeCount === 0 ? stocks.length : Math.min(aiAnalyzeCount, stocks.length);
-    const stocksToAnalyze = stocks.slice(0, countToAnalyze);
+    // Use the passed-in order (from sorted/filtered view), or fall back to stocks
+    const orderedStocks = stocksInOrder || stocks;
+    
+    // Use aiAnalyzeCount, or all stocks if set to 0
+    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setAiProgress({ current: 0, total: stocksToAnalyze.length });
     
     let updatedStocks = [...stocks];
@@ -570,7 +608,7 @@ export default function StockResearchApp() {
           aiAnalysis: result.analysis,
           insiderConviction: result.insiderConviction,
           upsidePct: result.upsidePct,
-          cupHandle: result.cupHandle
+          cupHandleScore: result.cupHandleScore
         } : s
       );
       setStocks(updatedStocks);
@@ -832,6 +870,11 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         const convB = b.insiderConviction ?? -1;
         return convB - convA;
       }
+      if (sortBy === 'cupHandleScore') {
+        const chA = a.cupHandleScore ?? -1;
+        const chB = b.cupHandleScore ?? -1;
+        return chB - chA;
+      }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
@@ -920,7 +963,25 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                 
                 {/* Grok AI Button */}
                 <button 
-                  onClick={runGrokAnalysis} 
+                  onClick={() => {
+                    // Get current sorted/filtered view
+                    const currentView = [...stocks]
+                      .filter(s => matchesCategory(s, sectorFilter))
+                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .sort((a, b) => {
+                        if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
+                        if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
+                        if (sortBy === 'insiderDate') {
+                          const dateA = a.lastInsiderPurchase?.date ? new Date(a.lastInsiderPurchase.date).getTime() : 0;
+                          const dateB = b.lastInsiderPurchase?.date ? new Date(b.lastInsiderPurchase.date).getTime() : 0;
+                          return dateB - dateA;
+                        }
+                        if (sortBy === 'upsidePct') return (b.upsidePct ?? -999) - (a.upsidePct ?? -999);
+                        if (sortBy === 'insiderConviction') return (b.insiderConviction ?? -1) - (a.insiderConviction ?? -1);
+                        return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
+                      });
+                    runGrokAnalysis(currentView);
+                  }} 
                   disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
@@ -1055,7 +1116,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               </div>
               <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
                 <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}><BarChart3 className="w-4 h-4 text-red-400" /></div><span className="text-sm font-medium text-slate-200">Cup & Handle</span></div>
-                <div className="flex items-center gap-3"><input type="range" min="0" max="30" value={aiWeights.cupHandle} onChange={e => { const v = parseInt(e.target.value); setAiWeights(p => ({...p, cupHandle: v})); setStocks(s => calcScores(s, weights, {...aiWeights, cupHandle: v})); }} className="flex-1" style={{ accentColor: '#f87171' }} /><span className="mono text-sm font-semibold w-8 text-right text-red-400">+{aiWeights.cupHandle}</span></div>
+                <div className="flex items-center gap-3"><input type="range" min="0" max="50" value={aiWeights.cupHandle} onChange={e => { const v = parseInt(e.target.value); setAiWeights(p => ({...p, cupHandle: v})); setStocks(s => calcScores(s, weights, {...aiWeights, cupHandle: v})); }} className="flex-1" style={{ accentColor: '#f87171' }} /><span className="mono text-sm font-semibold w-8 text-right text-red-400">{aiWeights.cupHandle}</span></div>
               </div>
             </div>
           </div>
@@ -1142,7 +1203,13 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                     Convic
                     {sortBy === 'insiderConviction' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-12 text-center">C&H</div>
+                  <div 
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'cupHandleScore' ? 'compositeScore' : 'cupHandleScore')}
+                  >
+                    C&H
+                    {sortBy === 'cupHandleScore' && <span className="text-emerald-400">↓</span>}
+                  </div>
                   <div className="w-16 text-center">52wL</div>
                   <div 
                     className="w-20 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -1205,15 +1272,15 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                           )}
                         </div>
                         <div className="w-12 text-center">
-                          {s.cupHandle !== null && s.cupHandle !== undefined ? (
+                          {s.cupHandleScore !== null && s.cupHandleScore !== undefined ? (
                             <span 
-                              className="text-xs font-bold px-1.5 py-0.5 rounded"
+                              className="text-xs font-bold mono px-1 py-0.5 rounded"
                               style={{ 
-                                background: s.cupHandle ? 'rgba(16,185,129,0.2)' : 'rgba(100,116,139,0.2)',
-                                color: s.cupHandle ? '#34d399' : '#64748b'
+                                background: s.cupHandleScore >= 70 ? 'rgba(16,185,129,0.2)' : s.cupHandleScore >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(100,116,139,0.2)',
+                                color: s.cupHandleScore >= 70 ? '#34d399' : s.cupHandleScore >= 40 ? '#fbbf24' : '#64748b'
                               }}
                             >
-                              {s.cupHandle ? 'YES' : 'NO'}
+                              {s.cupHandleScore}
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
@@ -1289,7 +1356,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.7</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.8</span>
           </div>
           <button 
             onClick={() => {

@@ -3,13 +3,16 @@
 
 export async function POST(request) {
   try {
-    const { prompt, isMatty, isTechnical } = await request.json();
+    const { prompt, isMatty, isTechnical, model } = await request.json();
     
     const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY;
     
     if (!GROK_KEY) {
       return Response.json({ error: 'Grok API key not configured' }, { status: 500 });
     }
+
+    // Use provided model or default to grok-4
+    const grokModel = model || 'grok-4';
 
     // Different system prompts based on analysis type
     let systemPrompt;
@@ -57,7 +60,7 @@ INSIDER_CONVICTION: [0-100]`;
         "Authorization": `Bearer ${GROK_KEY}`
       },
       body: JSON.stringify({
-        model: "grok-4",
+        model: grokModel,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: prompt }

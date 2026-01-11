@@ -407,8 +407,8 @@ async function getOptionsSentiment(ticker) {
 // ============================================
 // GROK AI ANALYSIS - Insider Conviction Focus
 // ============================================
-async function getAIAnalysis(stock) {
-  console.log(`Starting Grok Conviction analysis for ${stock.ticker}...`);
+async function getAIAnalysis(stock, model = 'grok-4') {
+  console.log(`Starting Grok Conviction analysis for ${stock.ticker} with ${model}...`);
   
   try {
     const prompt = `Analyze INSIDER CONVICTION for ${stock.ticker} (${stock.name}).
@@ -443,7 +443,7 @@ INSIDER_CONVICTION: [number from 0 to 100]`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, model })
     });
 
     if (!response.ok) {
@@ -466,8 +466,8 @@ INSIDER_CONVICTION: [number from 0 to 100]`;
 // ============================================
 // TECHNICAL ANALYSIS - Cup and Handle Deep Dive
 // ============================================
-async function getTechnicalAnalysis(stock) {
-  console.log(`Starting Technical Analysis for ${stock.ticker}...`);
+async function getTechnicalAnalysis(stock, model = 'grok-4') {
+  console.log(`Starting Technical Analysis for ${stock.ticker} with ${model}...`);
   
   try {
     const priceRange = stock.high52 - stock.low52;
@@ -532,7 +532,7 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, isTechnical: true })
+      body: JSON.stringify({ prompt, isTechnical: true, model })
     });
 
     if (!response.ok) {
@@ -568,8 +568,8 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
 // ============================================
 // MATTY BUFFET ANALYSIS - 4X Potential
 // ============================================
-async function getMattyAnalysis(stock, customPrompt) {
-  console.log(`Running Matty Buffet analysis for ${stock.ticker}...`);
+async function getMattyAnalysis(stock, customPrompt, model = 'grok-4') {
+  console.log(`Running Matty Buffet analysis for ${stock.ticker} with ${model}...`);
   
   try {
     const stockInfo = `
@@ -594,7 +594,7 @@ Give your Matty Buffet take on this stock. Be bold about the 8-month outlook!`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, isMatty: true })
+      body: JSON.stringify({ prompt, isMatty: true, model })
     });
 
     if (!response.ok) {
@@ -1026,7 +1026,10 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
   const [scanProgress, setScanProgress] = useState({ phase: '', current: 0, total: 0, found: 0 });
   const [cacheAge, setCacheAge] = useState(null);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
-  const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10);
+  const [convictionCount, setConvictionCount] = useState(10);
+  const [technicalCount, setTechnicalCount] = useState(10);
+  const [mattyCount, setMattyCount] = useState(10);
+  const [grokModel, setGrokModel] = useState('grok-4');
   const [aiWeights, setAiWeights] = useState({
     conviction: 15,
     upside: 15,
@@ -1145,7 +1148,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     setError(null);
     
     const orderedStocks = stocksInOrder || stocks;
-    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const countToAnalyze = convictionCount === 0 ? orderedStocks.length : Math.min(convictionCount, orderedStocks.length);
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setAiProgress({ current: 0, total: stocksToAnalyze.length });
     
@@ -1153,7 +1156,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
       setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
       setStatus({ type: 'loading', msg: `Conviction scan: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
-      const result = await getAIAnalysis(stocksToAnalyze[i]);
+      const result = await getAIAnalysis(stocksToAnalyze[i], grokModel);
       
       // Update stocks in state directly to allow parallel scans
       setStocks(prev => prev.map(s => 
@@ -1182,7 +1185,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     setError(null);
     
     const orderedStocks = stocksInOrder || stocks;
-    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const countToAnalyze = technicalCount === 0 ? orderedStocks.length : Math.min(technicalCount, orderedStocks.length);
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setTechnicalProgress({ current: 0, total: stocksToAnalyze.length });
     
@@ -1190,7 +1193,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
       setTechnicalProgress({ current: i + 1, total: stocksToAnalyze.length });
       setStatus({ type: 'loading', msg: `Technical scan: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
-      const result = await getTechnicalAnalysis(stocksToAnalyze[i]);
+      const result = await getTechnicalAnalysis(stocksToAnalyze[i], grokModel);
       
       // Update stocks in state directly to allow parallel scans
       setStocks(prev => prev.map(s => 
@@ -1219,7 +1222,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     setError(null);
     
     const orderedStocks = stocksInOrder || stocks;
-    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const countToAnalyze = mattyCount === 0 ? orderedStocks.length : Math.min(mattyCount, orderedStocks.length);
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setMattyProgress({ current: 0, total: stocksToAnalyze.length });
     
@@ -1227,7 +1230,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
       setMattyProgress({ current: i + 1, total: stocksToAnalyze.length });
       setStatus({ type: 'loading', msg: `Matty: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
-      const result = await getMattyAnalysis(stocksToAnalyze[i], mattyPrompt);
+      const result = await getMattyAnalysis(stocksToAnalyze[i], mattyPrompt, grokModel);
       
       // Update stocks in state directly to allow parallel scans
       setStocks(prev => prev.map(s => 
@@ -1800,7 +1803,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             setStatus({ type: 'loading', msg: `Full Spectrum: Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
             
             console.log(`Calling getAIAnalysis for ${stocksToAnalyze[i].ticker}...`);
-            const result = await getAIAnalysis(stocksToAnalyze[i]);
+            const result = await getAIAnalysis(stocksToAnalyze[i], grokModel);
             console.log(`Grok result for ${stocksToAnalyze[i].ticker}:`, result);
             
             updatedStocks = updatedStocks.map(s => 
@@ -1998,23 +2001,6 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             
             {stocks.length > 0 && (
               <>
-                {/* AI Count Selector */}
-                <select 
-                  value={aiAnalyzeCount} 
-                  onChange={e => setAiAnalyzeCount(parseInt(e.target.value))}
-                  className="rounded-lg px-2 py-2 text-sm border outline-none"
-                  style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171', width: '70px' }}
-                >
-                  <option value={5}>5</option>
-                  <option value={10}>10</option>
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                  <option value={200}>200</option>
-                  <option value={500}>500</option>
-                  <option value={0}>All</option>
-                </select>
-                
                 {/* Grok AI Button - Conviction Focus */}
                 <button 
                   onClick={() => {
@@ -2288,16 +2274,50 @@ Respond with ONLY a JSON array, no markdown, no explanation:
               <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
             
+            {/* Grok Model Selection */}
+            <div className="mb-6 p-4 rounded-xl border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
+              <h3 className="text-sm font-semibold text-amber-400 mb-3">Grok AI Model</h3>
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Model for all AI scans</label>
+                <select 
+                  value={grokModel} 
+                  onChange={e => setGrokModel(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                  style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(245,158,11,0.3)', color: '#fbbf24' }}
+                >
+                  <option value="grok-4">Grok 4 (Smartest)</option>
+                  <option value="grok-4-fast-reasoning">Grok 4 Fast Reasoning (Faster)</option>
+                </select>
+                <p className="text-xs text-slate-500 mt-1">Grok 4 is more thorough, Fast Reasoning is quicker but may be less detailed</p>
+              </div>
+            </div>
+            
             {/* Scan Settings Section */}
             <div className="mb-6 p-4 rounded-xl border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
-              <h3 className="text-sm font-semibold text-indigo-400 mb-3">Scan Settings</h3>
+              <h3 className="text-sm font-semibold text-indigo-400 mb-3">AI Scan Counts</h3>
               
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-3 gap-4 mb-4">
                 <div>
-                  <label className="text-xs text-slate-400 mb-1 block">Grok AI Count</label>
+                  <label className="text-xs text-slate-400 mb-1 block">Conviction Scan</label>
                   <select 
-                    value={aiAnalyzeCount} 
-                    onChange={e => setAiAnalyzeCount(parseInt(e.target.value))}
+                    value={convictionCount} 
+                    onChange={e => setConvictionCount(parseInt(e.target.value))}
+                    className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                    style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+                  >
+                    <option value={5}>5 stocks</option>
+                    <option value={10}>10 stocks</option>
+                    <option value={25}>25 stocks</option>
+                    <option value={50}>50 stocks</option>
+                    <option value={100}>100 stocks</option>
+                    <option value={0}>All stocks</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">C&H Technical Scan</label>
+                  <select 
+                    value={technicalCount} 
+                    onChange={e => setTechnicalCount(parseInt(e.target.value))}
                     className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
                     style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(99,102,241,0.3)', color: '#a5b4fc' }}
                   >
@@ -2310,10 +2330,10 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 mb-1 block">Matty Buffet Count</label>
+                  <label className="text-xs text-slate-400 mb-1 block">Matty 8mo Scan</label>
                   <select 
-                    value={mattyAnalyzeCount} 
-                    onChange={e => setMattyAnalyzeCount(parseInt(e.target.value))}
+                    value={mattyCount} 
+                    onChange={e => setMattyCount(parseInt(e.target.value))}
                     className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
                     style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(236,72,153,0.3)', color: '#f472b6' }}
                   >

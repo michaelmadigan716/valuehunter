@@ -1443,10 +1443,10 @@ Respond with ONLY a JSON array:
         
         for (let batch = 0; batch < totalBatches; batch++) {
           const startIdx = batch * batchSize;
-          const batchStocks = currentStocks.slice(startIdx, startIdx + batchSize);
+          const batchStocks = updatedStocks.slice(startIdx, startIdx + batchSize);
           
           setSupplyChainProgress({ current: startIdx, total: currentStocks.length });
-          setStatus({ type: 'loading', msg: `Full Spectrum: Singularity scan... ${startIdx}/${currentStocks.length}` });
+          setStatus({ type: 'loading', msg: `Full Spectrum: Singularity scan... ${startIdx + batchStocks.length}/${currentStocks.length}` });
           
           const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
           
@@ -1463,10 +1463,12 @@ SCORING: 0-20 = No connection | 21-40 = Tangential | 41-60 = Moderate | 61-80 = 
 STOCKS:
 ${stockList}
 
-Respond with ONLY a JSON array:
-[{"ticker":"ABC","singularity":85}]`;
+Respond with ONLY a JSON array, no markdown, no explanation:
+[{"ticker":"ABC","singularity":85},{"ticker":"XYZ","singularity":12}]`;
 
           try {
+            console.log(`Singularity batch ${batch + 1}/${totalBatches} - analyzing ${batchStocks.length} stocks`);
+            
             const response = await fetch("/api/grok", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1475,26 +1477,33 @@ Respond with ONLY a JSON array:
             
             if (response.ok) {
               const data = await response.json();
+              console.log('Singularity response:', data.analysis?.substring(0, 200));
+              
               let scores = [];
               try {
-                const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
+                const jsonMatch = data.analysis.match(/\[[\s\S]*?\]/);
                 if (jsonMatch) {
                   scores = JSON.parse(jsonMatch[0]);
+                  console.log(`Parsed ${scores.length} singularity scores`);
                 }
               } catch (e) {
-                console.warn('Failed to parse singularity response:', e);
+                console.warn('Failed to parse singularity response:', e, data.analysis?.substring(0, 500));
               }
               
-              scores.forEach(item => {
-                updatedStocks = updatedStocks.map(s => 
-                  s.ticker === item.ticker ? {
-                    ...s,
-                    singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
-                  } : s
-                );
-              });
-              
-              setStocks(updatedStocks);
+              if (scores.length > 0) {
+                scores.forEach(item => {
+                  updatedStocks = updatedStocks.map(s => 
+                    s.ticker === item.ticker ? {
+                      ...s,
+                      singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
+                    } : s
+                  );
+                });
+                
+                setStocks([...updatedStocks]);
+              }
+            } else {
+              console.error('Singularity API error:', response.status);
             }
           } catch (e) {
             console.error('Singularity scan batch failed:', e);
@@ -1505,9 +1514,10 @@ Respond with ONLY a JSON array:
           }
         }
         
-        currentStocks = updatedStocks;
+        currentStocks = [...updatedStocks];
         setIsScanningSupplyChain(false);
         setSupplyChainProgress({ current: 0, total: 0 });
+        console.log(`Singularity scan complete. Stocks with scores: ${currentStocks.filter(s => s.singularityScore).length}`);
       }
       
       // Phase 3: Grok AI Analysis
@@ -1516,48 +1526,55 @@ Respond with ONLY a JSON array:
         setIsAnalyzingAI(true);
         
         // Filter to only singularity 70+ if option enabled
-        let stocksPool = currentStocks;
+        let stocksPool = [...currentStocks];
         if (spectrumSettings.grokOnlySingularity70) {
           stocksPool = currentStocks.filter(s => (s.singularityScore || 0) >= 70);
+          console.log(`Filtering to singularity 70+: ${stocksPool.length} stocks qualify`);
         }
         
-        // grokCount of 0 means "all stocks"
-        const countToAnalyze = spectrumSettings.grokCount === 0 
-          ? stocksPool.length 
-          : Math.min(spectrumSettings.grokCount, stocksPool.length);
-        const stocksToAnalyze = stocksPool.slice(0, countToAnalyze);
-        setAiProgress({ current: 0, total: stocksToAnalyze.length });
+        if (stocksPool.length === 0) {
+          console.log('No stocks qualify for Grok analysis');
+          setIsAnalyzingAI(false);
+        } else {
+          // grokCount of 0 means "all stocks"
+          const countToAnalyze = spectrumSettings.grokCount === 0 
+            ? stocksPool.length 
+            : Math.min(spectrumSettings.grokCount, stocksPool.length);
+          const stocksToAnalyze = stocksPool.slice(0, countToAnalyze);
+          setAiProgress({ current: 0, total: stocksToAnalyze.length });
+          console.log(`Grok will analyze ${stocksToAnalyze.length} stocks`);
+          
+          let updatedStocks = [...currentStocks];
         
-        let updatedStocks = [...currentStocks];
-        
-        for (let i = 0; i < stocksToAnalyze.length; i++) {
-          setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
-          setStatus({ type: 'loading', msg: `Full Spectrum: Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
-          
-          const result = await getAIAnalysis(stocksToAnalyze[i]);
-          
-          updatedStocks = updatedStocks.map(s => 
-            s.ticker === stocksToAnalyze[i].ticker ? { 
-              ...s, 
-              aiAnalysis: result.analysis,
-              insiderConviction: result.insiderConviction,
-              upsidePct: result.upsidePct,
-              cupHandleScore: result.cupHandleScore
-            } : s
-          );
-          setStocks(updatedStocks);
-          
-          if (i < stocksToAnalyze.length - 1) {
-            await new Promise(r => setTimeout(r, 2000));
+          for (let i = 0; i < stocksToAnalyze.length; i++) {
+            setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
+            setStatus({ type: 'loading', msg: `Full Spectrum: Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+            
+            const result = await getAIAnalysis(stocksToAnalyze[i]);
+            
+            updatedStocks = updatedStocks.map(s => 
+              s.ticker === stocksToAnalyze[i].ticker ? { 
+                ...s, 
+                aiAnalysis: result.analysis,
+                insiderConviction: result.insiderConviction,
+                upsidePct: result.upsidePct,
+                cupHandleScore: result.cupHandleScore
+              } : s
+            );
+            setStocks(updatedStocks);
+            
+            if (i < stocksToAnalyze.length - 1) {
+              await new Promise(r => setTimeout(r, 2000));
+            }
           }
+          
+          const reScored = calcScores(updatedStocks, weights, aiWeights);
+          setStocks(reScored);
+          currentStocks = reScored;
+          
+          setIsAnalyzingAI(false);
+          setAiProgress({ current: 0, total: 0 });
         }
-        
-        const reScored = calcScores(updatedStocks, weights, aiWeights);
-        setStocks(reScored);
-        currentStocks = reScored;
-        
-        setIsAnalyzingAI(false);
-        setAiProgress({ current: 0, total: 0 });
       }
       
       // Save final session

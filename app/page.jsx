@@ -737,7 +737,6 @@ export default function StockResearchApp() {
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
-  const [isScanningOptions, setIsScanningOptions] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
   const [isRunningOracle, setIsRunningOracle] = useState(false);
   const [showWeights, setShowWeights] = useState(false);
@@ -750,7 +749,6 @@ export default function StockResearchApp() {
   const [sectorFilter, setSectorFilter] = useState('all');
   const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
-  const [optionsProgress, setOptionsProgress] = useState({ current: 0, total: 0 });
   
   // Session management
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -1057,109 +1055,6 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
     setIsScanningSupplyChain(false);
     setSupplyChainProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Singularity scan complete` });
-  };
-
-  // OPTIONS FLOW SCAN - Analyze unusual options activity for upside/downside signals
-  const runOptionsScan = async () => {
-    if (isScanningOptions || stocks.length === 0) return;
-    
-    setIsScanningOptions(true);
-    setError(null);
-    
-    const batchSize = 10;
-    const totalBatches = Math.ceil(stocks.length / batchSize);
-    setOptionsProgress({ current: 0, total: stocks.length });
-    
-    let updatedStocks = [...stocks];
-    
-    for (let batch = 0; batch < totalBatches; batch++) {
-      const startIdx = batch * batchSize;
-      const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
-      
-      setOptionsProgress({ current: startIdx, total: stocks.length });
-      setStatus({ type: 'loading', msg: `Scanning options flow... ${startIdx}/${stocks.length}` });
-      
-      const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} ($${s.price?.toFixed(2)}, MCap: $${s.marketCap}M)`).join('\n');
-      
-      const prompt = `You are an options flow analyst looking for unusual activity that signals potential big moves.
-
-For each stock, analyze what the TYPICAL options flow pattern would be and score:
-
-SHORT_TERM_SIGNAL (-100 to +100): 
-- Positive = unusual CALL buying, aggressive near-term bullish bets
-- Negative = unusual PUT buying, aggressive near-term bearish bets
-- Look for: large premium spent, unusual volume vs open interest, sweeps
-
-LONG_TERM_SIGNAL (-100 to +100):
-- Positive = LEAPS calls, long-dated bullish positioning
-- Negative = LEAPS puts, long-dated bearish positioning  
-- Look for: institutional accumulation patterns, roll-ups
-
-SCORING:
--100 to -70: Extremely bearish options flow
--69 to -30: Moderately bearish
--29 to +29: Neutral/no unusual activity
-+30 to +69: Moderately bullish
-+70 to +100: Extremely bullish options flow
-
-Note: For small-cap stocks, options may be illiquid. Score 0 if no meaningful options market exists.
-
-STOCKS:
-${stockList}
-
-Respond with ONLY a JSON array:
-[{"ticker":"ABC","shortTerm":45,"longTerm":72},{"ticker":"XYZ","shortTerm":-30,"longTerm":15}]`;
-
-      try {
-        const response = await fetch("/api/grok", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt })
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          let scores = [];
-          try {
-            const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              scores = JSON.parse(jsonMatch[0]);
-            }
-          } catch (e) {
-            console.warn('Failed to parse options response:', e);
-          }
-          
-          scores.forEach(item => {
-            updatedStocks = updatedStocks.map(s => 
-              s.ticker === item.ticker ? {
-                ...s,
-                optionsShortTerm: Math.min(100, Math.max(-100, item.shortTerm || 0)),
-                optionsLongTerm: Math.min(100, Math.max(-100, item.longTerm || 0))
-              } : s
-            );
-          });
-          
-          setStocks(updatedStocks);
-        }
-      } catch (e) {
-        console.error('Options scan batch failed:', e);
-      }
-      
-      if (batch < totalBatches - 1) {
-        await new Promise(r => setTimeout(r, 1500));
-      }
-    }
-    
-    // Save to session
-    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
-    if (currentSessionId) {
-      saveSession(currentSessionId, updatedStocks, scanStats);
-      setSessions(getAllSessions());
-    }
-    
-    setIsScanningOptions(false);
-    setOptionsProgress({ current: 0, total: 0 });
-    setStatus({ type: 'live', msg: `${stocks.length} stocks • Options scan complete` });
   };
 
   // Run Oracle Analysis on filtered stocks
@@ -1521,12 +1416,14 @@ Respond with ONLY a JSON array, no markdown, no explanation:
       }
       
       // Phase 3: Grok AI Analysis
+      console.log('Phase 3 check - grokEnabled:', spectrumSettings.grokEnabled, 'stocks:', currentStocks.length);
       if (spectrumSettings.grokEnabled && currentStocks.length > 0) {
         setFullSpectrumPhase('Running Grok AI Analysis...');
         setIsAnalyzingAI(true);
         
         // Filter to only singularity 70+ if option enabled
         let stocksPool = [...currentStocks];
+        console.log('grokOnlySingularity70:', spectrumSettings.grokOnlySingularity70);
         if (spectrumSettings.grokOnlySingularity70) {
           stocksPool = currentStocks.filter(s => (s.singularityScore || 0) >= 70);
           console.log(`Filtering to singularity 70+: ${stocksPool.length} stocks qualify`);
@@ -1542,7 +1439,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             : Math.min(spectrumSettings.grokCount, stocksPool.length);
           const stocksToAnalyze = stocksPool.slice(0, countToAnalyze);
           setAiProgress({ current: 0, total: stocksToAnalyze.length });
-          console.log(`Grok will analyze ${stocksToAnalyze.length} stocks`);
+          console.log(`Grok will analyze ${stocksToAnalyze.length} stocks:`, stocksToAnalyze.map(s => s.ticker));
           
           let updatedStocks = [...currentStocks];
         
@@ -1550,7 +1447,9 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
             setStatus({ type: 'loading', msg: `Full Spectrum: Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
             
+            console.log(`Calling getAIAnalysis for ${stocksToAnalyze[i].ticker}...`);
             const result = await getAIAnalysis(stocksToAnalyze[i]);
+            console.log(`Grok result for ${stocksToAnalyze[i].ticker}:`, result);
             
             updatedStocks = updatedStocks.map(s => 
               s.ticker === stocksToAnalyze[i].ticker ? { 
@@ -1575,6 +1474,8 @@ Respond with ONLY a JSON array, no markdown, no explanation:
           setIsAnalyzingAI(false);
           setAiProgress({ current: 0, total: 0 });
         }
+      } else {
+        console.log('Skipping Grok analysis - grokEnabled:', spectrumSettings.grokEnabled, 'stocks:', currentStocks.length);
       }
       
       // Save final session
@@ -1653,12 +1554,6 @@ Respond with ONLY a JSON array, no markdown, no explanation:
       }
       if (sortBy === 'singularityScore') {
         return (b.singularityScore ?? -1) - (a.singularityScore ?? -1);
-      }
-      if (sortBy === 'optionsShortTerm') {
-        return (b.optionsShortTerm ?? -999) - (a.optionsShortTerm ?? -999);
-      }
-      if (sortBy === 'optionsLongTerm') {
-        return (b.optionsLongTerm ?? -999) - (a.optionsLongTerm ?? -999);
       }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
@@ -1809,25 +1704,6 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                     <><RefreshCw className="w-4 h-4 animate-spin" />Scanning {supplyChainProgress.current}/{supplyChainProgress.total}...</>
                   ) : (
                     <><Zap className="w-4 h-4" />Singularity Scan</>
-                  )}
-                </button>
-                
-                {/* Options Scan Button */}
-                <button 
-                  onClick={runOptionsScan} 
-                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain || isScanningOptions}
-                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
-                  style={{ 
-                    background: isScanningOptions ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
-                    borderColor: 'rgba(239,68,68,0.3)', 
-                    color: '#f87171',
-                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain || isScanningOptions) ? 0.7 : 1
-                  }}
-                >
-                  {isScanningOptions ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" />Scanning {optionsProgress.current}/{optionsProgress.total}...</>
-                  ) : (
-                    <><Activity className="w-4 h-4" />Options Flow</>
                   )}
                 </button>
               </>
@@ -2201,19 +2077,18 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                     {sortBy === 'singularityScore' && <span className="text-amber-400">↓</span>}
                   </div>
                   <div 
-                    className="w-16 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'optionsShortTerm' ? 'compositeScore' : 'optionsShortTerm')}
-                    title="Options Flow (Short/Long)"
-                  >
-                    Opts
-                    {sortBy === 'optionsShortTerm' && <span className="text-red-400">↓</span>}
-                  </div>
-                  <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'upsidePct' ? 'compositeScore' : 'upsidePct')}
                   >
                     Up%
                     {sortBy === 'upsidePct' && <span className="text-emerald-400">↓</span>}
+                  </div>
+                  <div 
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'insiderConviction' ? 'compositeScore' : 'insiderConviction')}
+                  >
+                    Conv
+                    {sortBy === 'insiderConviction' && <span className="text-emerald-400">↓</span>}
                   </div>
                   <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -2270,35 +2145,6 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        {/* Options Flow (Short/Long) */}
-                        <div className="w-16 text-center">
-                          {(s.optionsShortTerm !== null && s.optionsShortTerm !== undefined) || (s.optionsLongTerm !== null && s.optionsLongTerm !== undefined) ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span 
-                                className="text-[10px] font-bold mono px-1 rounded"
-                                style={{ 
-                                  background: s.optionsShortTerm >= 30 ? 'rgba(16,185,129,0.2)' : s.optionsShortTerm <= -30 ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.1)',
-                                  color: s.optionsShortTerm >= 30 ? '#34d399' : s.optionsShortTerm <= -30 ? '#f87171' : '#64748b'
-                                }}
-                                title="Short-term options signal"
-                              >
-                                S:{s.optionsShortTerm > 0 ? '+' : ''}{s.optionsShortTerm || 0}
-                              </span>
-                              <span 
-                                className="text-[10px] font-bold mono px-1 rounded"
-                                style={{ 
-                                  background: s.optionsLongTerm >= 30 ? 'rgba(16,185,129,0.2)' : s.optionsLongTerm <= -30 ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.1)',
-                                  color: s.optionsLongTerm >= 30 ? '#34d399' : s.optionsLongTerm <= -30 ? '#f87171' : '#64748b'
-                                }}
-                                title="Long-term options signal"
-                              >
-                                L:{s.optionsLongTerm > 0 ? '+' : ''}{s.optionsLongTerm || 0}
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-slate-600">—</span>
-                          )}
-                        </div>
                         {/* Upside % */}
                         <div className="w-12 text-center">
                           {s.upsidePct !== null && s.upsidePct !== undefined ? (
@@ -2310,6 +2156,22 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                               }}
                             >
                               {s.upsidePct > 0 ? '+' : ''}{s.upsidePct}%
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        {/* Conviction */}
+                        <div className="w-12 text-center">
+                          {s.insiderConviction !== null && s.insiderConviction !== undefined ? (
+                            <span 
+                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              style={{ 
+                                background: s.insiderConviction >= 70 ? 'rgba(16,185,129,0.2)' : s.insiderConviction >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.insiderConviction >= 70 ? '#34d399' : s.insiderConviction >= 40 ? '#fbbf24' : '#f87171'
+                              }}
+                            >
+                              {s.insiderConviction}
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>

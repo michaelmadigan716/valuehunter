@@ -2676,8 +2676,6 @@ Respond with ONLY a JSON array:
                 </div>
               </div>
               
-              {/* Column Headers - Clickable for sorting */}
-              {sorted.length > 0 && (
               {/* Filter Panel */}
               {showFilters && (
                 <div className="p-4 border-b border-slate-800/50" style={{ background: 'rgba(139,92,246,0.05)' }}>

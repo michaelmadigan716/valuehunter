@@ -107,12 +107,18 @@ async function getPrevDay(ticker) {
 // Get pre-market and after-hours data from Polygon snapshot
 async function getExtendedHours(ticker) {
   try {
+    // Polygon snapshot endpoint - requires paid plan for extended hours
     const res = await fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_KEY}`);
+    
     if (!res.ok) {
-      console.warn(`Extended hours API error for ${ticker}: ${res.status}`);
+      const errorText = await res.text();
+      console.warn(`Extended hours API error for ${ticker}: ${res.status} - ${errorText}`);
       return null;
     }
+    
     const data = await res.json();
+    console.log(`Polygon snapshot for ${ticker}:`, JSON.stringify(data, null, 2));
+    
     const snapshot = data.ticker;
     
     if (!snapshot) {
@@ -121,22 +127,31 @@ async function getExtendedHours(ticker) {
     }
     
     const prevClose = snapshot.prevDay?.c || snapshot.day?.c;
+    const todayClose = snapshot.day?.c;
+    
+    // Pre-market data (Polygon uses 'preMarket' object)
     const preMarket = snapshot.preMarket;
+    // After-hours data (Polygon uses 'afterHours' object)
     const afterHours = snapshot.afterHours;
     
     let preMarketChange = null;
     let afterHoursChange = null;
     
-    // Pre-market data
+    // Pre-market: compare to previous close
     if (preMarket && preMarket.price && prevClose) {
       preMarketChange = ((preMarket.price - prevClose) / prevClose) * 100;
-      console.log(`${ticker} Pre-market: $${preMarket.price} (${preMarketChange.toFixed(2)}%)`);
+      console.log(`${ticker} Pre-market: $${preMarket.price} vs prev close $${prevClose} = ${preMarketChange.toFixed(2)}%`);
     }
     
-    // After-hours data  
-    if (afterHours && afterHours.price && prevClose) {
-      afterHoursChange = ((afterHours.price - prevClose) / prevClose) * 100;
-      console.log(`${ticker} After-hours: $${afterHours.price} (${afterHoursChange.toFixed(2)}%)`);
+    // After-hours: compare to today's close
+    if (afterHours && afterHours.price && todayClose) {
+      afterHoursChange = ((afterHours.price - todayClose) / todayClose) * 100;
+      console.log(`${ticker} After-hours: $${afterHours.price} vs today close $${todayClose} = ${afterHoursChange.toFixed(2)}%`);
+    }
+    
+    // If no extended hours data found, log what we did get
+    if (!preMarketChange && !afterHoursChange) {
+      console.log(`${ticker} - No extended hours data. prevClose: ${prevClose}, todayClose: ${todayClose}, preMarket: ${JSON.stringify(preMarket)}, afterHours: ${JSON.stringify(afterHours)}`);
     }
     
     return {
@@ -147,7 +162,7 @@ async function getExtendedHours(ticker) {
       lastUpdate: new Date().toISOString()
     };
   } catch (e) { 
-    console.warn(`Extended hours failed for ${ticker}:`, e);
+    console.error(`Extended hours failed for ${ticker}:`, e);
     return null; 
   }
 }

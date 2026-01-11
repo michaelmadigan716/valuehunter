@@ -541,13 +541,20 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
     }
 
     const data = await response.json();
+    console.log(`Technical response for ${stock.ticker}:`, data);
     
-    // Extract cup handle score
-    let cupHandleScore = null;
-    const match = data.analysis?.match(/CUP_HANDLE_SCORE[:\s]*(\d+)/i);
-    if (match) {
-      cupHandleScore = Math.min(100, Math.max(0, parseInt(match[1])));
+    // Use cupHandleScore from API response (already extracted by route)
+    let cupHandleScore = data.cupHandleScore;
+    
+    // Fallback: try to extract from text if not in response
+    if (cupHandleScore === null || cupHandleScore === undefined) {
+      const match = data.analysis?.match(/CUP_HANDLE_SCORE[:\s]*(\d+)/i);
+      if (match) {
+        cupHandleScore = Math.min(100, Math.max(0, parseInt(match[1])));
+      }
     }
+    
+    console.log(`${stock.ticker} Cup & Handle Score: ${cupHandleScore}`);
     
     let analysis = data.analysis?.replace(/CUP_HANDLE_SCORE[:\s]*\d+%?/gi, '').trim() || 'No response';
     
@@ -592,30 +599,25 @@ Give your Matty Buffet take on this stock. Be bold about the 8-month outlook!`;
 
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Matty API error:', errorData);
       return { mattyAnalysis: `API Error: ${errorData.error || response.status}`, mattyPrediction: null };
     }
 
     const data = await response.json();
+    console.log('Matty response:', data);
     
-    // Extract 8MO_PREDICTION from the response (can be negative or positive, up to 800)
-    let mattyPrediction = null;
-    const match = data.analysis?.match(/8MO_PREDICTION[:\s]*([+-]?\d+)/i);
-    if (match) {
-      mattyPrediction = Math.min(800, Math.max(-80, parseInt(match[1])));
-    }
+    // Use the mattyPrediction from API if available, otherwise try to parse from text
+    let mattyPrediction = data.mattyPrediction;
     
-    // Also try 4X_POTENTIAL for backwards compatibility
-    if (mattyPrediction === null) {
-      const oldMatch = data.analysis?.match(/4X_POTENTIAL[:\s]*(\d+)/i);
-      if (oldMatch) {
-        // Convert old 0-100 scale to new prediction (rough mapping)
-        const oldScore = parseInt(oldMatch[1]);
-        mattyPrediction = oldScore >= 80 ? 300 : oldScore >= 60 ? 150 : oldScore >= 40 ? 50 : oldScore >= 20 ? 10 : -20;
+    if (mattyPrediction === null && data.analysis) {
+      const match = data.analysis.match(/8MO_PREDICTION[:\s]*([+-]?\d+)/i);
+      if (match) {
+        mattyPrediction = Math.min(800, Math.max(-80, parseInt(match[1])));
       }
     }
     
     // Clean up the analysis text
-    let analysis = data.analysis?.replace(/8MO_PREDICTION[:\s]*[+-]?\d+%?/gi, '').replace(/4X_POTENTIAL[:\s]*\d+%?/gi, '').trim() || 'No response';
+    let analysis = data.analysis?.replace(/8MO_PREDICTION[:\s]*[+-]?\d+%?/gi, '').trim() || 'No response';
     
     return { mattyAnalysis: analysis, mattyPrediction };
   } catch (e) {

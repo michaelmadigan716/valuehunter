@@ -470,64 +470,134 @@ async function getTechnicalAnalysis(stock, model = 'grok-4') {
   console.log(`Starting Technical Analysis for ${stock.ticker} with ${model}...`);
   
   try {
-    const priceRange = stock.high52 - stock.low52;
-    const currentPosition = ((stock.price - stock.low52) / priceRange * 100).toFixed(1);
-    const fromHigh = ((stock.high52 - stock.price) / stock.high52 * 100).toFixed(1);
+    // Fetch actual historical price data for multiple timeframes
+    const endDate = new Date().toISOString().split('T')[0];
     
-    const prompt = `You are an expert technical analyst specializing in CUP AND HANDLE patterns. Analyze ${stock.ticker} (${stock.name}).
+    // Get 2 years of weekly data for longer-term patterns
+    const startDate2Y = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const weeklyRes = await fetch(
+      `https://api.polygon.io/v2/aggs/ticker/${stock.ticker}/range/1/week/${startDate2Y}/${endDate}?adjusted=true&sort=asc&apiKey=${POLYGON_KEY}`
+    );
+    const weeklyData = await weeklyRes.json();
+    const weeklyPrices = weeklyData.results || [];
+    
+    // Get 6 months of daily data for recent action
+    const startDate6M = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const dailyRes = await fetch(
+      `https://api.polygon.io/v2/aggs/ticker/${stock.ticker}/range/1/day/${startDate6M}/${endDate}?adjusted=true&sort=asc&apiKey=${POLYGON_KEY}`
+    );
+    const dailyData = await dailyRes.json();
+    const dailyPrices = dailyData.results || [];
+    
+    if (weeklyPrices.length < 10) {
+      return { technicalAnalysis: 'Insufficient price history for analysis', cupHandleScore: null };
+    }
+    
+    // Format weekly data - show key points for pattern recognition
+    const weeklyChartData = weeklyPrices.map((p, i) => {
+      const date = new Date(p.t).toISOString().split('T')[0];
+      return `${date}: O=${p.o.toFixed(2)} H=${p.h.toFixed(2)} L=${p.l.toFixed(2)} C=${p.c.toFixed(2)} V=${Math.round(p.v/1000)}K`;
+    }).join('\n');
+    
+    // Format recent daily data (last 60 days for handle detection)
+    const recentDaily = dailyPrices.slice(-60).map((p, i) => {
+      const date = new Date(p.t).toISOString().split('T')[0];
+      return `${date}: O=${p.o.toFixed(2)} H=${p.h.toFixed(2)} L=${p.l.toFixed(2)} C=${p.c.toFixed(2)} V=${Math.round(p.v/1000)}K`;
+    }).join('\n');
+    
+    // Calculate key statistics from the data
+    const allHighs = weeklyPrices.map(p => p.h);
+    const allLows = weeklyPrices.map(p => p.l);
+    const allCloses = weeklyPrices.map(p => p.c);
+    const allVolumes = weeklyPrices.map(p => p.v);
+    
+    const highestHigh = Math.max(...allHighs);
+    const lowestLow = Math.min(...allLows);
+    const avgVolume = allVolumes.reduce((a, b) => a + b, 0) / allVolumes.length;
+    const recentVolume = allVolumes.slice(-4).reduce((a, b) => a + b, 0) / 4;
+    
+    // Find potential cup formation points
+    const highestIndex = allHighs.indexOf(highestHigh);
+    const lowestIndex = allLows.indexOf(lowestLow);
+    
+    // Calculate depth of potential cup
+    const priorHigh = Math.max(...allHighs.slice(0, Math.max(highestIndex, 10)));
+    const cupBottom = Math.min(...allLows.slice(highestIndex > 0 ? highestIndex : 0));
+    const cupDepth = priorHigh > 0 ? ((priorHigh - cupBottom) / priorHigh * 100).toFixed(1) : 0;
+    
+    const currentPrice = stock.price;
+    const fromHighestHigh = ((highestHigh - currentPrice) / highestHigh * 100).toFixed(1);
+    const fromLowestLow = ((currentPrice - lowestLow) / lowestLow * 100).toFixed(1);
+    
+    const prompt = `You are a world-class technical analyst with 30+ years specializing in CUP AND HANDLE patterns - the most powerful bullish continuation pattern.
 
-PRICE DATA:
-- Current Price: $${stock.price?.toFixed(2)}
-- 52-Week Low: $${stock.low52?.toFixed(2)}
-- 52-Week High: $${stock.high52?.toFixed(2)}
-- Position in 52-Week Range: ${currentPosition}% (0% = at low, 100% = at high)
-- Distance from 52-Week Low: +${stock.fromLow?.toFixed(1)}%
-- Distance from 52-Week High: -${fromHigh}%
+STOCK: ${stock.ticker} - ${stock.name}
+CURRENT PRICE: $${currentPrice.toFixed(2)}
+52-WEEK HIGH: $${stock.high52?.toFixed(2)} | 52-WEEK LOW: $${stock.low52?.toFixed(2)}
+HIGHEST PRICE IN DATA: $${highestHigh.toFixed(2)} | LOWEST: $${lowestLow.toFixed(2)}
+FROM HIGHEST HIGH: -${fromHighestHigh}% | FROM LOWEST LOW: +${fromLowestLow}%
+POTENTIAL CUP DEPTH: ${cupDepth}%
+VOLUME TREND: Recent avg ${Math.round(recentVolume/1000)}K vs Overall avg ${Math.round(avgVolume/1000)}K
 
-ANALYZE FOR CUP AND HANDLE PATTERN:
+═══════════════════════════════════════════
+WEEKLY PRICE DATA (${weeklyPrices.length} weeks):
+═══════════════════════════════════════════
+${weeklyChartData}
 
-A PERFECT cup and handle requires ALL of these elements:
+═══════════════════════════════════════════
+RECENT DAILY DATA (Last 60 days - for handle detection):
+═══════════════════════════════════════════
+${recentDaily}
 
-THE CUP:
-1. Prior uptrend before the cup formed
-2. Rounded "U" shaped bottom (NOT a sharp V-bottom)
-3. Cup depth typically 12-35% from prior high
-4. Cup duration: 7 weeks to 65 weeks (longer = stronger)
-5. Both sides of cup should be roughly symmetrical
-6. Right side of cup should show increasing volume
+═══════════════════════════════════════════
+YOUR TASK: ANALYZE THIS CHART FOR CUP & HANDLE PATTERN
+═══════════════════════════════════════════
 
-THE HANDLE:
-1. Forms in the UPPER HALF of the cup (above the midpoint)
-2. Handle pullback is 8-12% from cup's right side high (max 15%)
-3. Handle should drift DOWN slightly or move sideways (never up)
-4. Handle duration: 1-4 weeks minimum
-5. Volume should be light and decreasing in handle
-6. Handle should NOT drop below the cup's midpoint
+STEP 1 - IDENTIFY THE CUP:
+- Look for a prior uptrend, then a rounded "U" shaped decline and recovery
+- Cup should take 7-65 weeks to form (longer = more powerful)
+- Depth should be 15-35% from the prior high (12-50% acceptable)
+- Both sides should be roughly symmetrical
+- Bottom should be ROUNDED, not V-shaped
+- Right side should show gradually increasing volume
 
-THE BREAKOUT:
-1. Price breaks above the handle's resistance (left side of handle)
-2. Volume should surge 40-50%+ above average on breakout
-3. Ideal buy point is just above the handle's high
+STEP 2 - IDENTIFY THE HANDLE:
+- Forms AFTER the cup, in the UPPER HALF of the pattern
+- Should be a small pullback of 8-12% (max 15%) from cup's right side high
+- Handle drifts DOWN or sideways (never sharply up)
+- Duration: 1-4+ weeks
+- Volume should CONTRACT during handle formation
+- Handle should NOT drop into lower half of cup
 
-Based on the data provided (${currentPosition}% in range, ${stock.fromLow?.toFixed(1)}% from low, ${fromHigh}% from high):
+STEP 3 - IDENTIFY BREAKOUT POTENTIAL:
+- Is price near the handle's resistance level?
+- Is there a defined "pivot point" to watch?
+- What volume confirmation would you need?
 
-EVALUATE each element and determine if this could be a cup and handle setup.
+STEP 4 - CHECK MULTIPLE TIMEFRAMES:
+- Could this be a cup and handle on the WEEKLY chart?
+- Could this be a cup and handle on the DAILY chart?
+- Are there nested patterns (smaller C&H within larger C&H)?
 
-CUP & HANDLE SCORING:
-- 0-15: Definitely NOT a cup and handle - wrong pattern entirely
-- 16-30: Very unlikely - missing most key elements
-- 31-45: Possible but weak - some elements present, many missing
-- 46-60: Developing pattern - several elements present, needs confirmation
-- 61-75: Good pattern forming - most elements present, watching for handle/breakout
-- 76-85: Strong pattern - nearly all elements present, high probability setup
-- 86-100: Textbook perfect - all elements present, breakout imminent or occurring
+CRITICAL SCORING GUIDELINES:
+0-15: NOT a cup and handle - completely different pattern (downtrend, channel, etc.)
+16-30: Very unlikely - maybe one element present but fundamentally not C&H
+31-45: Weak possibility - some cup shape visible but missing key elements
+46-60: Developing - clear cup visible, watching for handle formation
+61-75: Good setup - cup complete, handle forming or formed, needs breakout
+76-85: Strong pattern - textbook shape, proper depth/duration, breakout approaching
+86-100: EXCEPTIONAL - perfect pattern with all elements, breakout imminent or underway
 
-Be STRICT in your scoring. Most stocks do NOT have valid cup and handle patterns.
+BE RIGOROUS. A TRUE cup and handle is RARE. Most stocks score 0-40.
+Only score 70+ if you can clearly identify BOTH the cup AND the handle with proper characteristics.
 
-Write 2-3 sentences about the technical pattern. Plain text only.
+Provide a detailed 3-5 sentence analysis describing:
+1. What pattern you see in the chart
+2. Specific dates/prices of key formation points if C&H exists
+3. What would confirm or invalidate this pattern
 
-END WITH EXACTLY THIS LINE:
-CUP_HANDLE_SCORE: [number from 0 to 100]`;
+END WITH EXACTLY:
+CUP_HANDLE_SCORE: [0-100]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",

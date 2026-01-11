@@ -2829,7 +2829,6 @@ Respond with ONLY a JSON array:
                   </div>
                   <div className="w-6"></div>
                 </div>
-              )}
               
               <div className="divide-y divide-slate-800/30 max-h-[calc(100vh-350px)] overflow-y-auto">
                 {sorted.length === 0 && !isScanning ? (

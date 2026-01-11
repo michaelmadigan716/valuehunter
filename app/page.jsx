@@ -1316,24 +1316,27 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
   };
 
   // Batch scan for SINGULARITY SCORE (0-100) and category detection
-  const runSingularityScan = async () => {
+  const runSingularityScan = async (stocksInOrder) => {
     if (isScanningSupplyChain || stocks.length === 0) return;
     
     setIsScanningSupplyChain(true);
     setError(null);
     
+    // Use filtered list if provided, otherwise use all stocks
+    const stocksToScan = stocksInOrder || stocks;
+    
     const batchSize = singularityBatchSize;
-    const totalBatches = Math.ceil(stocks.length / batchSize);
-    setSupplyChainProgress({ current: 0, total: stocks.length });
+    const totalBatches = Math.ceil(stocksToScan.length / batchSize);
+    setSupplyChainProgress({ current: 0, total: stocksToScan.length });
     
     let updatedStocks = [...stocks];
     
     for (let batch = 0; batch < totalBatches; batch++) {
       const startIdx = batch * batchSize;
-      const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
+      const batchStocks = stocksToScan.slice(startIdx, startIdx + batchSize);
       
-      setSupplyChainProgress({ current: startIdx, total: stocks.length });
-      setStatus({ type: 'loading', msg: `Scanning Singularity relevance... ${startIdx}/${stocks.length}` });
+      setSupplyChainProgress({ current: startIdx, total: stocksToScan.length });
+      setStatus({ type: 'loading', msg: `Scanning Singularity relevance... ${startIdx}/${stocksToScan.length}` });
       
       const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
       
@@ -2037,6 +2040,12 @@ Respond with ONLY a JSON array:
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => !filters.excludeBanks || !s.isBank)
+                      .filter(s => !filters.excludeFood || !s.isFood)
+                      .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
+                      .filter(s => !filters.excludeInsurance || !s.isInsurance)
+                      .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runGrokAnalysis(currentView);
                   }} 
@@ -2062,6 +2071,12 @@ Respond with ONLY a JSON array:
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => !filters.excludeBanks || !s.isBank)
+                      .filter(s => !filters.excludeFood || !s.isFood)
+                      .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
+                      .filter(s => !filters.excludeInsurance || !s.isInsurance)
+                      .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runTechnicalAnalysis(currentView);
                   }} 
@@ -2087,6 +2102,12 @@ Respond with ONLY a JSON array:
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => !filters.excludeBanks || !s.isBank)
+                      .filter(s => !filters.excludeFood || !s.isFood)
+                      .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
+                      .filter(s => !filters.excludeInsurance || !s.isInsurance)
+                      .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runMattyAnalysis(currentView);
                   }} 
@@ -2128,7 +2149,19 @@ Respond with ONLY a JSON array:
                 
                 {/* Supply Chain Scan Button */}
                 <button 
-                  onClick={runSingularityScan} 
+                  onClick={() => {
+                    const currentView = [...stocks]
+                      .filter(s => matchesCategory(s, sectorFilter))
+                      .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => !filters.excludeBanks || !s.isBank)
+                      .filter(s => !filters.excludeFood || !s.isFood)
+                      .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
+                      .filter(s => !filters.excludeInsurance || !s.isInsurance)
+                      .filter(s => !filters.excludeREIT || !s.isREIT)
+                      .sort((a, b) => b.compositeScore - a.compositeScore);
+                    runSingularityScan(currentView);
+                  }}
                   disabled={isScanning}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 

@@ -1351,7 +1351,7 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
         const response = await fetch("/api/grok", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt })
+          body: JSON.stringify({ prompt, model: grokModel })
         });
         
         if (response.ok) {
@@ -1722,7 +1722,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             const response = await fetch("/api/grok", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt })
+              body: JSON.stringify({ prompt, model: grokModel })
             });
             
             if (response.ok) {

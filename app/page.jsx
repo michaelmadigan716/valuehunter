@@ -2645,6 +2645,23 @@ Respond with ONLY a JSON array:
               <button onClick={() => setShowSessions(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
             
+            {/* New Session Button */}
+            <button
+              onClick={() => {
+                setStocks([]);
+                setCurrentSessionId(null);
+                setSelected(null);
+                setScanProgress({ phase: 'idle', current: 0, total: 0, found: 0 });
+                setStatus({ type: 'ready', msg: 'New session created. Run a scan to find stocks.' });
+                setShowSessions(false);
+              }}
+              className="mb-4 w-full px-4 py-3 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 hover:border-emerald-500/50 transition-colors"
+              style={{ background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+            >
+              <Plus className="w-5 h-5" />
+              New Session
+            </button>
+            
             <div className="flex-1 overflow-y-auto space-y-2">
               {sessions.length === 0 ? (
                 <p className="text-center text-slate-500 py-8">No saved sessions yet. Run a scan to create one.</p>

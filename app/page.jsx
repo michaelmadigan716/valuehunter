@@ -108,11 +108,17 @@ async function getPrevDay(ticker) {
 async function getExtendedHours(ticker) {
   try {
     const res = await fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_KEY}`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`Extended hours API error for ${ticker}: ${res.status}`);
+      return null;
+    }
     const data = await res.json();
     const snapshot = data.ticker;
     
-    if (!snapshot) return null;
+    if (!snapshot) {
+      console.warn(`No snapshot data for ${ticker}`);
+      return null;
+    }
     
     const prevClose = snapshot.prevDay?.c || snapshot.day?.c;
     const preMarket = snapshot.preMarket;
@@ -121,12 +127,16 @@ async function getExtendedHours(ticker) {
     let preMarketChange = null;
     let afterHoursChange = null;
     
-    if (preMarket?.price && prevClose) {
+    // Pre-market data
+    if (preMarket && preMarket.price && prevClose) {
       preMarketChange = ((preMarket.price - prevClose) / prevClose) * 100;
+      console.log(`${ticker} Pre-market: $${preMarket.price} (${preMarketChange.toFixed(2)}%)`);
     }
     
-    if (afterHours?.price && prevClose) {
+    // After-hours data  
+    if (afterHours && afterHours.price && prevClose) {
       afterHoursChange = ((afterHours.price - prevClose) / prevClose) * 100;
+      console.log(`${ticker} After-hours: $${afterHours.price} (${afterHoursChange.toFixed(2)}%)`);
     }
     
     return {
@@ -566,7 +576,7 @@ LAST INSIDER BUY: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.
 
 ${stockInfo}
 
-Give your Matty Buffet take on this stock. Be bold and specific about why you love it or hate it for singularity plays.`;
+Give your Matty Buffet take on this stock. Be bold about the 8-month outlook!`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -576,25 +586,35 @@ Give your Matty Buffet take on this stock. Be bold and specific about why you lo
 
     if (!response.ok) {
       const errorData = await response.json();
-      return { mattyAnalysis: `API Error: ${errorData.error || response.status}`, fourXPotential: null };
+      return { mattyAnalysis: `API Error: ${errorData.error || response.status}`, mattyPrediction: null };
     }
 
     const data = await response.json();
     
-    // Extract 4X_POTENTIAL from the response
-    let fourXPotential = null;
-    const match = data.analysis?.match(/4X_POTENTIAL[:\s]*(\d+)/i);
+    // Extract 8MO_PREDICTION from the response (can be negative or positive, up to 800)
+    let mattyPrediction = null;
+    const match = data.analysis?.match(/8MO_PREDICTION[:\s]*([+-]?\d+)/i);
     if (match) {
-      fourXPotential = Math.min(100, Math.max(0, parseInt(match[1])));
+      mattyPrediction = Math.min(800, Math.max(-80, parseInt(match[1])));
+    }
+    
+    // Also try 4X_POTENTIAL for backwards compatibility
+    if (mattyPrediction === null) {
+      const oldMatch = data.analysis?.match(/4X_POTENTIAL[:\s]*(\d+)/i);
+      if (oldMatch) {
+        // Convert old 0-100 scale to new prediction (rough mapping)
+        const oldScore = parseInt(oldMatch[1]);
+        mattyPrediction = oldScore >= 80 ? 300 : oldScore >= 60 ? 150 : oldScore >= 40 ? 50 : oldScore >= 20 ? 10 : -20;
+      }
     }
     
     // Clean up the analysis text
-    let analysis = data.analysis?.replace(/4X_POTENTIAL[:\s]*\d+%?/gi, '').trim() || 'No response';
+    let analysis = data.analysis?.replace(/8MO_PREDICTION[:\s]*[+-]?\d+%?/gi, '').replace(/4X_POTENTIAL[:\s]*\d+%?/gi, '').trim() || 'No response';
     
-    return { mattyAnalysis: analysis, fourXPotential };
+    return { mattyAnalysis: analysis, mattyPrediction };
   } catch (e) {
     console.error('Matty analysis failed:', e);
-    return { mattyAnalysis: `Error: ${e.message}`, fourXPotential: null };
+    return { mattyAnalysis: `Error: ${e.message}`, mattyPrediction: null };
   }
 }
 
@@ -914,24 +934,39 @@ export default function StockResearchApp() {
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
   
   // Matty Buffet prompt (editable)
-  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a sharp-eyed investor hunting for stocks that could 4X within a year. You focus on singularity plays (AI, robotics, energy, rare earths) but you're NOT easily impressed.
+  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a bold, optimistic investor who sees the SINGULARITY coming and wants to position for the explosion in robotics, solar energy, AI infrastructure, and raw materials that will power it all.
 
-CRITICAL EVALUATION - Ask yourself:
-1. Does this company have a REAL competitive moat? (Not just being in the right sector)
-2. Are the financials solid? (Cash position, debt, revenue trend)
-3. Is the valuation reasonable for a 4X? (Already priced in?)
-4. What's the SPECIFIC catalyst that drives 4X growth?
-5. What could go wrong? (Competition, execution risk, macro)
+YOUR 8-MONTH OUTLOOK: You're predicting where this stock will be in 8 months based on singularity tailwinds.
 
-BE SKEPTICAL: Just being in solar/robotics/batteries doesn't mean 4X. Most won't. Only rate high (70%+) if you see:
-- Clear path to 4X revenue/earnings
-- Strong insider buying
-- Undervalued vs peers
-- Imminent catalyst
+SINGULARITY "PICK AND SHOVEL" PLAYS YOU LOVE:
+- Rare earth miners & processors (magnets for motors)
+- Copper, lithium, cobalt suppliers
+- Solar panel manufacturers & installers
+- Battery technology (solid state, grid storage)
+- Robotics components (actuators, sensors, motors)
+- AI chip suppliers & semiconductor equipment
+- Data center infrastructure (cooling, power)
+- Nuclear energy (uranium, SMRs)
+- Humanoid robot supply chain
 
-Keep response to 3-4 sentences. Be specific about WHY or WHY NOT.
+YOUR ANALYSIS STYLE:
+- You're OPTIMISTIC but not delusional
+- If a stock is perfectly positioned to scale with singularity demand, you'll boldly predict +300%, +500%, even +800% 
+- If it's a solid play but not explosive, maybe +50% to +150%
+- If it's mediocre or poorly positioned, you'll say +10% to -30%
+- If it's a disaster waiting to happen, you'll predict -50% or worse
 
-End with: 4X_POTENTIAL: [0-100]`;
+CONSIDER:
+1. How critical is this company to singularity infrastructure?
+2. Can they actually SCALE to meet explosive demand?
+3. Are insiders buying? (They know something)
+4. Is it still cheap or already priced in?
+5. What's the catalyst in the next 8 months?
+
+Be conversational and bold. Give your honest Matty take in 3-4 sentences.
+
+End with: 8MO_PREDICTION: [number from -80 to +800]
+(This is your percent prediction for 8 months from now. Negative = downside, Positive = upside)`;
 
   const [mattyPrompt, setMattyPrompt] = useState(DEFAULT_MATTY_PROMPT);
   const [mattyAnalyzeCount, setMattyAnalyzeCount] = useState(10);
@@ -1168,7 +1203,7 @@ End with: 4X_POTENTIAL: [0-100]`;
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Technical scan complete` });
   };
 
-  // Matty Buffet Analysis - 4X Potential scoring
+  // Matty Buffet Analysis - 8 Month Price Prediction
   const runMattyAnalysis = async (stocksInOrder) => {
     if (stocks.length === 0) return;
     
@@ -1191,7 +1226,7 @@ End with: 4X_POTENTIAL: [0-100]`;
         s.ticker === stocksToAnalyze[i].ticker ? { 
           ...s, 
           mattyAnalysis: result.mattyAnalysis,
-          fourXPotential: result.fourXPotential
+          mattyPrediction: result.mattyPrediction
         } : s
       ));
       
@@ -1864,11 +1899,13 @@ Respond with ONLY a JSON array, no markdown, no explanation:
       if (sortBy === 'singularityScore') {
         return (b.singularityScore ?? -1) - (a.singularityScore ?? -1);
       }
-      if (sortBy === 'fourXPotential') {
-        return (b.fourXPotential ?? -1) - (a.fourXPotential ?? -1);
+      if (sortBy === 'mattyPrediction') {
+        return (b.mattyPrediction ?? -999) - (a.mattyPrediction ?? -999);
       }
-      if (sortBy === 'preMarketChange') {
-        return (b.preMarketChange ?? -999) - (a.preMarketChange ?? -999);
+      if (sortBy === 'extendedChange') {
+        const extA = a.preMarketChange ?? a.afterHoursChange ?? -999;
+        const extB = b.preMarketChange ?? b.afterHoursChange ?? -999;
+        return extB - extA;
       }
       if (sortBy === 'afterHoursChange') {
         return (b.afterHoursChange ?? -999) - (a.afterHoursChange ?? -999);
@@ -2041,27 +2078,27 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   {isAnalyzingMatty ? (
                     <><RefreshCw className="w-4 h-4 animate-spin" />Matty {mattyProgress.current}/{mattyProgress.total}...</>
                   ) : (
-                    <><TrendingUp className="w-4 h-4" />Matty 4X</>
+                    <><TrendingUp className="w-4 h-4" />Matty 8mo</>
                   )}
                 </button>
                 
-                {/* Refresh Pre/AH Button */}
+                {/* Extended Hours Button */}
                 <button 
                   onClick={refreshPremarketData} 
                   disabled={isRefreshingPremarket || isScanning}
-                  className="px-3 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
                     background: isRefreshingPremarket ? 'rgba(34,211,238,0.3)' : 'rgba(34,211,238,0.1)', 
                     borderColor: 'rgba(34,211,238,0.3)', 
                     color: '#22d3ee',
-                    opacity: isRefreshingPremarket ? 0.7 : 1
+                    opacity: (isRefreshingPremarket || isScanning) ? 0.7 : 1
                   }}
-                  title="Refresh Pre-Market & After-Hours data"
+                  title="Get Pre-Market or After-Hours data"
                 >
                   {isRefreshingPremarket ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Extended...</>
                   ) : (
-                    <RefreshCw className="w-4 h-4" />
+                    <><Clock className="w-4 h-4" />Extended</>
                   )}
                 </button>
                 
@@ -2565,19 +2602,11 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   <div className="w-24 text-right">Price / MCap</div>
                   <div 
                     className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'preMarketChange' ? 'compositeScore' : 'preMarketChange')}
-                    title="Pre-Market Change %"
+                    onClick={() => setSortBy(sortBy === 'extendedChange' ? 'compositeScore' : 'extendedChange')}
+                    title="Pre-Market or After-Hours Change %"
                   >
-                    Pre
-                    {sortBy === 'preMarketChange' && <span className="text-cyan-400">↓</span>}
-                  </div>
-                  <div 
-                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'afterHoursChange' ? 'compositeScore' : 'afterHoursChange')}
-                    title="After-Hours Change %"
-                  >
-                    AH
-                    {sortBy === 'afterHoursChange' && <span className="text-cyan-400">↓</span>}
+                    Ext
+                    {sortBy === 'extendedChange' && <span className="text-cyan-400">↓</span>}
                   </div>
                   <div className="w-16 text-center">Net Cash</div>
                   <div 
@@ -2596,12 +2625,12 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                     {sortBy === 'singularityScore' && <span className="text-amber-400">↓</span>}
                   </div>
                   <div 
-                    className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'fourXPotential' ? 'compositeScore' : 'fourXPotential')}
-                    title="Matty Buffet 4X Potential"
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'mattyPrediction' ? 'compositeScore' : 'mattyPrediction')}
+                    title="Matty 8-Month Prediction"
                   >
-                    4X
-                    {sortBy === 'fourXPotential' && <span className="text-pink-400">↓</span>}
+                    8mo
+                    {sortBy === 'mattyPrediction' && <span className="text-pink-400">↓</span>}
                   </div>
                   <div 
                     className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -2645,28 +2674,28 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
                             {s.aiAnalysis && <Sparkles className="w-4 h-4 text-emerald-400" title={`Conviction: ${s.insiderConviction}%`} />}
                             {s.technicalAnalysis && <Activity className="w-4 h-4 text-indigo-400" title={`C&H: ${s.cupHandleScore}`} />}
-                            {s.mattyAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Matty: ${s.fourXPotential}% 4X potential`} />}
+                            {s.mattyAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Matty: ${s.mattyPrediction > 0 ? '+' : ''}${s.mattyPrediction}% in 8mo`} />}
                             {s.singularityScore >= 70 && <Zap className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        {/* Pre-Market */}
+                        {/* Extended Hours (Pre-Market or After-Hours) */}
                         <div className="w-14 text-center">
                           {s.preMarketChange !== null && s.preMarketChange !== undefined ? (
-                            <span className="text-xs font-bold mono" style={{ color: s.preMarketChange >= 0 ? '#22d3ee' : '#f87171' }}>
-                              {s.preMarketChange >= 0 ? '+' : ''}{s.preMarketChange.toFixed(1)}%
-                            </span>
-                          ) : (
-                            <span className="text-xs text-slate-600">—</span>
-                          )}
-                        </div>
-                        {/* After-Hours */}
-                        <div className="w-14 text-center">
-                          {s.afterHoursChange !== null && s.afterHoursChange !== undefined ? (
-                            <span className="text-xs font-bold mono" style={{ color: s.afterHoursChange >= 0 ? '#22d3ee' : '#f87171' }}>
-                              {s.afterHoursChange >= 0 ? '+' : ''}{s.afterHoursChange.toFixed(1)}%
-                            </span>
+                            <div>
+                              <span className="text-xs font-bold mono" style={{ color: s.preMarketChange >= 0 ? '#22d3ee' : '#f87171' }}>
+                                {s.preMarketChange >= 0 ? '+' : ''}{s.preMarketChange.toFixed(1)}%
+                              </span>
+                              <p className="text-[9px] text-slate-500">PRE</p>
+                            </div>
+                          ) : s.afterHoursChange !== null && s.afterHoursChange !== undefined ? (
+                            <div>
+                              <span className="text-xs font-bold mono" style={{ color: s.afterHoursChange >= 0 ? '#22d3ee' : '#f87171' }}>
+                                {s.afterHoursChange >= 0 ? '+' : ''}{s.afterHoursChange.toFixed(1)}%
+                              </span>
+                              <p className="text-[9px] text-slate-500">AH</p>
+                            </div>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
                           )}
@@ -2689,17 +2718,17 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        {/* 4X Potential (Matty Buffet) */}
-                        <div className="w-10 text-center">
-                          {s.fourXPotential !== null && s.fourXPotential !== undefined ? (
+                        {/* 8-Month Prediction (Matty Buffet) */}
+                        <div className="w-12 text-center">
+                          {s.mattyPrediction !== null && s.mattyPrediction !== undefined ? (
                             <span 
                               className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
-                                background: s.fourXPotential >= 70 ? 'rgba(236,72,153,0.3)' : s.fourXPotential >= 40 ? 'rgba(236,72,153,0.15)' : 'rgba(51,65,85,0.2)',
-                                color: s.fourXPotential >= 70 ? '#f472b6' : s.fourXPotential >= 40 ? '#ec4899' : '#64748b'
+                                background: s.mattyPrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.mattyPrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.mattyPrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.mattyPrediction >= 200 ? '#34d399' : s.mattyPrediction >= 50 ? '#6ee7b7' : s.mattyPrediction >= 0 ? '#fbbf24' : '#f87171'
                               }}
                             >
-                              {s.fourXPotential}
+                              {s.mattyPrediction > 0 ? '+' : ''}{s.mattyPrediction}%
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
@@ -2765,10 +2794,13 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.08)', borderColor: 'rgba(236,72,153,0.3)' }}>
                               <h4 className="text-sm font-semibold text-pink-400 mb-2 flex items-center gap-2">
                                 <TrendingUp className="w-4 h-4" />
-                                Matty Buffet's Take
-                                {s.fourXPotential !== null && (
-                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ background: s.fourXPotential >= 70 ? 'rgba(16,185,129,0.2)' : s.fourXPotential >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', color: s.fourXPotential >= 70 ? '#34d399' : s.fourXPotential >= 40 ? '#fbbf24' : '#f87171' }}>
-                                    {s.fourXPotential}% 4X Potential
+                                Matty Buffet's 8-Month Outlook
+                                {s.mattyPrediction !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ 
+                                    background: s.mattyPrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.mattyPrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.mattyPrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', 
+                                    color: s.mattyPrediction >= 200 ? '#34d399' : s.mattyPrediction >= 50 ? '#6ee7b7' : s.mattyPrediction >= 0 ? '#fbbf24' : '#f87171' 
+                                  }}>
+                                    {s.mattyPrediction > 0 ? '+' : ''}{s.mattyPrediction}% in 8 months
                                   </span>
                                 )}
                               </h4>
@@ -2793,7 +2825,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                           
                           {!s.aiAnalysis && !s.mattyAnalysis && !s.technicalAnalysis && i < 10 && (
                             <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
-                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-400" />Run Conviction, Matty 4X, or C&H Scan to analyze</p>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-400" />Run Conviction, Matty 8mo, or C&H Scan to analyze</p>
                             </div>
                           )}
                           

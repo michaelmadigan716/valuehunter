@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar, Cpu, Atom, Bot, Eye, Filter, Flame } from 'lucide-react';
+import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar, Cpu, Atom, Bot, Eye, Filter, Flame, Plus, Trash2 } from 'lucide-react';
 
 // ============================================
 // API CONFIGURATION
@@ -566,30 +566,44 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
 }
 
 // ============================================
-// MATTY BUFFET ANALYSIS - 4X Potential
+// UPSIDE SCAN - Independent 8-Month Price Target Research
 // ============================================
-async function getMattyAnalysis(stock, customPrompt, model = 'grok-4') {
-  console.log(`Running Matty Buffet analysis for ${stock.ticker} with ${model}...`);
+async function getUpsideAnalysis(stock, model = 'grok-4') {
+  console.log(`Running Upside Scan for ${stock.ticker} with ${model}...`);
   
   try {
-    const stockInfo = `
-STOCK: ${stock.ticker} - ${stock.name}
-SECTOR: ${stock.sector || 'Unknown'}
-PRICE: $${stock.price?.toFixed(2)}
-MARKET CAP: $${stock.marketCap}M
-52-WEEK LOW: $${stock.low52?.toFixed(2)}
-52-WEEK HIGH: $${stock.high52?.toFixed(2)}
-FROM 52W LOW: +${stock.fromLow?.toFixed(1)}%
-NET CASH: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'} ${stock.netCash > 0 ? '(CASH RICH!)' : stock.netCash < 0 ? '(IN DEBT)' : ''}
-SINGULARITY SCORE: ${stock.singularityScore || 'Not scored'}
-LAST INSIDER BUY: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
-`;
+    // Only pass ticker and name - NO data table info
+    const prompt = `You are a senior equity research analyst. Conduct independent research on ${stock.ticker} (${stock.name}) to estimate the 8-month price upside potential.
 
-    const prompt = `${customPrompt}
+DO YOUR OWN RESEARCH. Do NOT rely on any data I provide - research the company independently.
 
-${stockInfo}
+RESEARCH METHODOLOGY - Use multiple approaches and triangulate:
 
-Give your Matty Buffet take on this stock. Be bold about the 8-month outlook!`;
+1. ANALYST PRICE TARGETS: Find current Wall Street price targets and consensus estimates. What are bulls vs bears saying?
+
+2. COMPANY GUIDANCE: Has management provided revenue/earnings guidance? What milestones or catalysts are they targeting in the next 8 months?
+
+3. EARNINGS ESTIMATES: What are consensus EPS estimates? Is the company beating or missing estimates? What multiple expansion/contraction is likely?
+
+4. MARKET OPPORTUNITY: What TAM is the company addressing? What market share gains are realistic? How does this translate to revenue growth?
+
+5. COMPARABLE VALUATION: How does the company trade vs peers on EV/Revenue, P/E, or other relevant metrics? Is there a re-rating opportunity?
+
+6. UPCOMING CATALYSTS: Product launches, FDA approvals, contract wins, earnings reports, investor days, index inclusion, M&A potential?
+
+7. RISK FACTORS: What could go wrong? Dilution, competition, execution risk, macro headwinds?
+
+SYNTHESIZE your research into a professional 2-3 paragraph analysis. Be specific with numbers and sources where possible.
+
+Your 8-month prediction should reflect:
+- Conservative case vs bull case scenarios
+- Probability-weighted expected return
+- Key assumptions driving your estimate
+
+END WITH EXACTLY THIS LINE:
+8MO_PREDICTION: [your predicted % change from current price, range -80 to +500]
+
+Example: 8MO_PREDICTION: +45 (meaning you expect 45% upside in 8 months)`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -599,30 +613,30 @@ Give your Matty Buffet take on this stock. Be bold about the 8-month outlook!`;
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Matty API error:', errorData);
-      return { mattyAnalysis: `API Error: ${errorData.error || response.status}`, mattyPrediction: null };
+      console.error('Upside scan API error:', errorData);
+      return { upsideAnalysis: `API Error: ${errorData.error || response.status}`, upsidePrediction: null };
     }
 
     const data = await response.json();
-    console.log('Matty response:', data);
+    console.log('Upside scan response:', data);
     
-    // Use the mattyPrediction from API if available, otherwise try to parse from text
-    let mattyPrediction = data.mattyPrediction;
+    // Use the mattyPrediction from API (renamed but same extraction)
+    let upsidePrediction = data.mattyPrediction;
     
-    if (mattyPrediction === null && data.analysis) {
+    if (upsidePrediction === null && data.analysis) {
       const match = data.analysis.match(/8MO_PREDICTION[:\s]*([+-]?\d+)/i);
       if (match) {
-        mattyPrediction = Math.min(800, Math.max(-80, parseInt(match[1])));
+        upsidePrediction = Math.min(500, Math.max(-80, parseInt(match[1])));
       }
     }
     
     // Clean up the analysis text
     let analysis = data.analysis?.replace(/8MO_PREDICTION[:\s]*[+-]?\d+%?/gi, '').trim() || 'No response';
     
-    return { mattyAnalysis: analysis, mattyPrediction };
+    return { upsideAnalysis: analysis, upsidePrediction };
   } catch (e) {
-    console.error('Matty analysis failed:', e);
-    return { mattyAnalysis: `Error: ${e.message}`, mattyPrediction: null };
+    console.error('Upside scan failed:', e);
+    return { upsideAnalysis: `Error: ${e.message}`, upsidePrediction: null };
   }
 }
 
@@ -922,7 +936,7 @@ export default function StockResearchApp() {
   const [selected, setSelected] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
-  const [isAnalyzingMatty, setIsAnalyzingMatty] = useState(false);
+  const [isAnalyzingUpside, setIsAnalyzingUpside] = useState(false);
   const [isAnalyzingTechnical, setIsAnalyzingTechnical] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
@@ -932,7 +946,7 @@ export default function StockResearchApp() {
   const [showSessions, setShowSessions] = useState(false);
   const [showFullSpectrumModal, setShowFullSpectrumModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [mattyProgress, setMattyProgress] = useState({ current: 0, total: 0 });
+  const [upsideProgress, setUpsideProgress] = useState({ current: 0, total: 0 });
   const [technicalProgress, setTechnicalProgress] = useState({ current: 0, total: 0 });
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
@@ -940,44 +954,15 @@ export default function StockResearchApp() {
   const [sectorFilter, setSectorFilter] = useState('all');
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
   
-  // Matty Buffet prompt (editable)
-  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a bold, optimistic investor who sees the SINGULARITY coming and wants to position for the explosion in robotics, solar energy, AI infrastructure, and raw materials that will power it all.
-
-YOUR 8-MONTH OUTLOOK: You're predicting where this stock will be in 8 months based on singularity tailwinds.
-
-SINGULARITY "PICK AND SHOVEL" PLAYS YOU LOVE:
-- Rare earth miners & processors (magnets for motors)
-- Copper, lithium, cobalt suppliers
-- Solar panel manufacturers & installers
-- Battery technology (solid state, grid storage)
-- Robotics components (actuators, sensors, motors)
-- AI chip suppliers & semiconductor equipment
-- Data center infrastructure (cooling, power)
-- Nuclear energy (uranium, SMRs)
-- Humanoid robot supply chain
-
-YOUR ANALYSIS STYLE:
-- You're OPTIMISTIC but not delusional
-- If a stock is perfectly positioned to scale with singularity demand, you'll boldly predict +300%, +500%, even +800% 
-- If it's a solid play but not explosive, maybe +50% to +150%
-- If it's mediocre or poorly positioned, you'll say +10% to -30%
-- If it's a disaster waiting to happen, you'll predict -50% or worse
-
-CONSIDER:
-1. How critical is this company to singularity infrastructure?
-2. Can they actually SCALE to meet explosive demand?
-3. Are insiders buying? (They know something)
-4. Is it still cheap or already priced in?
-5. What's the catalyst in the next 8 months?
-
-Be conversational and bold. Give your honest Matty take in 3-4 sentences.
-
-End with: 8MO_PREDICTION: [number from -80 to +800]
-(This is your percent prediction for 8 months from now. Negative = downside, Positive = upside)`;
-
-  const [mattyPrompt, setMattyPrompt] = useState(DEFAULT_MATTY_PROMPT);
-  const [mattyAnalyzeCount, setMattyAnalyzeCount] = useState(10);
   const [isRefreshingPremarket, setIsRefreshingPremarket] = useState(false);
+  
+  // Manual stock add
+  const [showAddStocks, setShowAddStocks] = useState(false);
+  const [addStocksInput, setAddStocksInput] = useState('');
+  const [isAddingStocks, setIsAddingStocks] = useState(false);
+  
+  // Clear column data
+  const [showClearData, setShowClearData] = useState(false);
   
   // Global settings
   const [globalSettings, setGlobalSettings] = useState({
@@ -1027,7 +1012,7 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
   const [convictionCount, setConvictionCount] = useState(10);
   const [technicalCount, setTechnicalCount] = useState(10);
-  const [mattyCount, setMattyCount] = useState(10);
+  const [upsideCount, setUpsideCount] = useState(10);
   const [grokModel, setGrokModel] = useState('grok-4');
   const [singularityBatchSize, setSingularityBatchSize] = useState(15);
   
@@ -1227,30 +1212,30 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Technical scan complete` });
   };
 
-  // Matty Buffet Analysis - 8 Month Price Prediction
-  const runMattyAnalysis = async (stocksInOrder) => {
+  // Upside Scan - Independent 8 Month Price Target Research
+  const runUpsideAnalysis = async (stocksInOrder) => {
     if (stocks.length === 0) return;
     
-    setIsAnalyzingMatty(true);
+    setIsAnalyzingUpside(true);
     setError(null);
     
     const orderedStocks = stocksInOrder || stocks;
-    const countToAnalyze = mattyCount === 0 ? orderedStocks.length : Math.min(mattyCount, orderedStocks.length);
+    const countToAnalyze = upsideCount === 0 ? orderedStocks.length : Math.min(upsideCount, orderedStocks.length);
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
-    setMattyProgress({ current: 0, total: stocksToAnalyze.length });
+    setUpsideProgress({ current: 0, total: stocksToAnalyze.length });
     
     for (let i = 0; i < stocksToAnalyze.length; i++) {
-      setMattyProgress({ current: i + 1, total: stocksToAnalyze.length });
-      setStatus({ type: 'loading', msg: `Matty: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+      setUpsideProgress({ current: i + 1, total: stocksToAnalyze.length });
+      setStatus({ type: 'loading', msg: `Upside: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
-      const result = await getMattyAnalysis(stocksToAnalyze[i], mattyPrompt, grokModel);
+      const result = await getUpsideAnalysis(stocksToAnalyze[i], grokModel);
       
       // Update stocks in state directly to allow parallel scans
       setStocks(prev => prev.map(s => 
         s.ticker === stocksToAnalyze[i].ticker ? { 
           ...s, 
-          mattyAnalysis: result.mattyAnalysis,
-          mattyPrediction: result.mattyPrediction
+          upsideAnalysis: result.upsideAnalysis,
+          upsidePrediction: result.upsidePrediction
         } : s
       ));
       
@@ -1259,9 +1244,9 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
       }
     }
     
-    setIsAnalyzingMatty(false);
-    setMattyProgress({ current: 0, total: 0 });
-    setStatus({ type: 'live', msg: `${stocks.length} stocks • Matty analysis complete` });
+    setIsAnalyzingUpside(false);
+    setUpsideProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Upside scan complete` });
   };
 
   // Refresh pre/post market data for all stocks
@@ -1313,6 +1298,171 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     
     setIsRefreshingPremarket(false);
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Pre/post market updated` });
+  };
+
+  // Manually add stocks by ticker
+  const addManualStocks = async () => {
+    if (!addStocksInput.trim() || isAddingStocks) return;
+    
+    setIsAddingStocks(true);
+    setError(null);
+    
+    // Parse input - split by comma, space, newline, etc.
+    const tickers = addStocksInput
+      .toUpperCase()
+      .split(/[,\s\n]+/)
+      .map(t => t.trim())
+      .filter(t => t.length > 0 && t.length <= 5)
+      .filter(t => /^[A-Z]+$/.test(t));
+    
+    // Remove duplicates and already existing tickers
+    const existingTickers = new Set(stocks.map(s => s.ticker));
+    const newTickers = [...new Set(tickers)].filter(t => !existingTickers.has(t));
+    
+    if (newTickers.length === 0) {
+      setError('No new valid tickers to add');
+      setIsAddingStocks(false);
+      return;
+    }
+    
+    setStatus({ type: 'loading', msg: `Adding ${newTickers.length} stocks...` });
+    
+    const newStocks = [];
+    
+    for (let i = 0; i < newTickers.length; i++) {
+      const ticker = newTickers[i];
+      setStatus({ type: 'loading', msg: `Fetching ${ticker}... (${i + 1}/${newTickers.length})` });
+      
+      try {
+        // Get basic stock data from Polygon
+        const detailsRes = await fetch(
+          `https://api.polygon.io/v3/reference/tickers/${ticker}?apiKey=${POLYGON_KEY}`
+        );
+        const detailsData = await detailsRes.json();
+        const details = detailsData.results;
+        
+        if (!details) {
+          console.warn(`No data found for ${ticker}`);
+          continue;
+        }
+        
+        // Get price data
+        const priceRes = await fetch(
+          `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${POLYGON_KEY}`
+        );
+        const priceData = await priceRes.json();
+        const prevDay = priceData.results?.[0];
+        
+        if (!prevDay) {
+          console.warn(`No price data for ${ticker}`);
+          continue;
+        }
+        
+        // Get 52-week data
+        const weekData = await get52WeekData(ticker);
+        let high52 = prevDay.c, low52 = prevDay.c;
+        if (weekData.length > 0) {
+          high52 = Math.max(...weekData.map(d => d.h));
+          low52 = Math.min(...weekData.map(d => d.l));
+        }
+        
+        const currentPrice = prevDay.c;
+        const change = prevDay.o > 0 ? ((prevDay.c - prevDay.o) / prevDay.o) * 100 : 0;
+        const marketCapM = details.market_cap ? Math.round(details.market_cap / 1000000) : 0;
+        const fromLow = low52 > 0 ? ((currentPrice - low52) / low52) * 100 : 0;
+        const positionIn52Week = high52 !== low52 ? ((currentPrice - low52) / (high52 - low52)) * 100 : 50;
+        
+        const stock = {
+          id: stocks.length + newStocks.length + 1,
+          ticker,
+          name: details.name || ticker,
+          sector: details.sic_description || 'Unknown',
+          price: currentPrice,
+          marketCap: marketCapM,
+          change,
+          high52,
+          low52,
+          positionIn52Week,
+          fromLow,
+          rsi: null,
+          cash: null,
+          debt: null,
+          netCash: null,
+          hasFinancials: false,
+          financialSource: null,
+          lastInsiderPurchase: null,
+          hasInsiderData: false,
+          priceTarget: null,
+          agentScores: {
+            pricePosition: Math.max(0, 100 - positionIn52Week),
+            insiderActivity: 0,
+            netCash: 50,
+          },
+          compositeScore: 0,
+          aiAnalysis: null,
+          manuallyAdded: true
+        };
+        
+        newStocks.push(stock);
+        
+        // Small delay to avoid rate limiting
+        if (i < newTickers.length - 1) {
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (e) {
+        console.error(`Failed to fetch ${ticker}:`, e);
+      }
+    }
+    
+    if (newStocks.length > 0) {
+      // Recalculate scores for all stocks including new ones
+      const allStocks = [...stocks, ...newStocks];
+      const scoredStocks = calcScores(allStocks, weights, aiWeights);
+      setStocks(scoredStocks);
+      setStatus({ type: 'live', msg: `Added ${newStocks.length} stocks • ${scoredStocks.length} total` });
+    } else {
+      setStatus({ type: 'ready', msg: 'No stocks could be added' });
+    }
+    
+    setAddStocksInput('');
+    setShowAddStocks(false);
+    setIsAddingStocks(false);
+  };
+
+  // Clear specific column data
+  const clearColumnData = (columnType) => {
+    setStocks(prev => prev.map(s => {
+      switch (columnType) {
+        case 'conviction':
+          return { ...s, aiAnalysis: null, insiderConviction: null };
+        case 'upside':
+          return { ...s, upsideAnalysis: null, upsidePrediction: null };
+        case 'technical':
+          return { ...s, technicalAnalysis: null, cupHandleScore: null };
+        case 'singularity':
+          return { ...s, singularityScore: null, isBank: false, isFood: false, isHealthcare: false, isInsurance: false, isREIT: false };
+        case 'all':
+          return { 
+            ...s, 
+            aiAnalysis: null, 
+            insiderConviction: null,
+            upsideAnalysis: null, 
+            upsidePrediction: null,
+            technicalAnalysis: null, 
+            cupHandleScore: null,
+            singularityScore: null,
+            isBank: false, 
+            isFood: false, 
+            isHealthcare: false, 
+            isInsurance: false, 
+            isREIT: false
+          };
+        default:
+          return s;
+      }
+    }));
+    setShowClearData(false);
+    setStatus({ type: 'live', msg: `Cleared ${columnType} data for all stocks` });
   };
 
   // Batch scan for SINGULARITY SCORE (0-100) and category detection
@@ -1943,8 +2093,8 @@ Respond with ONLY a JSON array:
       if (sortBy === 'singularityScore') {
         return (b.singularityScore ?? -1) - (a.singularityScore ?? -1);
       }
-      if (sortBy === 'mattyPrediction') {
-        return (b.mattyPrediction ?? -999) - (a.mattyPrediction ?? -999);
+      if (sortBy === 'upsidePrediction') {
+        return (b.upsidePrediction ?? -999) - (a.upsidePrediction ?? -999);
       }
       if (sortBy === 'extendedChange') {
         const extA = a.preMarketChange ?? a.afterHoursChange ?? -999;
@@ -2096,7 +2246,7 @@ Respond with ONLY a JSON array:
                   )}
                 </button>
                 
-                {/* Matty Buffet Button */}
+                {/* Upside Scan Button */}
                 <button 
                   onClick={() => {
                     const currentView = [...stocks]
@@ -2109,21 +2259,21 @@ Respond with ONLY a JSON array:
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
-                    runMattyAnalysis(currentView);
+                    runUpsideAnalysis(currentView);
                   }} 
                   disabled={isScanning}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
-                    background: isAnalyzingMatty ? 'rgba(236,72,153,0.3)' : 'rgba(236,72,153,0.1)', 
+                    background: isAnalyzingUpside ? 'rgba(236,72,153,0.3)' : 'rgba(236,72,153,0.1)', 
                     borderColor: 'rgba(236,72,153,0.3)', 
                     color: '#f472b6',
                     opacity: isScanning ? 0.5 : 1
                   }}
                 >
-                  {isAnalyzingMatty ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" />Matty {mattyProgress.current}/{mattyProgress.total}...</>
+                  {isAnalyzingUpside ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Upside {upsideProgress.current}/{upsideProgress.total}...</>
                   ) : (
-                    <><TrendingUp className="w-4 h-4" />Matty 8mo</>
+                    <><TrendingUp className="w-4 h-4" />Upside 8mo</>
                   )}
                 </button>
                 
@@ -2393,10 +2543,10 @@ Respond with ONLY a JSON array:
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 mb-1 block">Matty 8mo Scan</label>
+                  <label className="text-xs text-slate-400 mb-1 block">Upside 8mo Scan</label>
                   <select 
-                    value={mattyCount} 
-                    onChange={e => setMattyCount(parseInt(e.target.value))}
+                    value={upsideCount} 
+                    onChange={e => setUpsideCount(parseInt(e.target.value))}
                     className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
                     style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(236,72,153,0.3)', color: '#f472b6' }}
                   >
@@ -2473,31 +2623,6 @@ Respond with ONLY a JSON array:
                   </div>
                 </div>
               )}
-            </div>
-            
-            {/* Matty Buffet Prompt Section */}
-            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.05)', borderColor: 'rgba(236,72,153,0.2)' }}>
-              <h3 className="text-sm font-semibold text-pink-400 mb-3">Matty Buffet Prompt</h3>
-              <p className="text-xs text-slate-500 mb-2">Customize how Matty analyzes stocks for 4X potential</p>
-              <textarea 
-                value={mattyPrompt}
-                onChange={e => setMattyPrompt(e.target.value)}
-                className="w-full rounded-lg px-3 py-3 text-sm border outline-none resize-none"
-                style={{ 
-                  background: 'rgba(30,41,59,0.5)', 
-                  borderColor: 'rgba(236,72,153,0.3)', 
-                  color: '#e2e8f0',
-                  minHeight: '200px'
-                }}
-                placeholder="Enter Matty Buffet's system prompt..."
-              />
-              <button 
-                onClick={() => setMattyPrompt(DEFAULT_MATTY_PROMPT)} 
-                className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium border"
-                style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}
-              >
-                Reset to Default
-              </button>
             </div>
             
             <button 
@@ -2683,6 +2808,30 @@ Respond with ONLY a JSON array:
                 <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} of {stocks.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
                 <div className="flex gap-3 items-center">
                   <button 
+                    onClick={() => setShowAddStocks(!showAddStocks)}
+                    className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
+                    style={{ 
+                      background: showAddStocks ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', 
+                      borderColor: showAddStocks ? 'rgba(16,185,129,0.5)' : 'rgba(51,65,85,0.5)', 
+                      color: showAddStocks ? '#34d399' : '#94a3b8' 
+                    }}
+                    title="Add stocks manually"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => setShowClearData(!showClearData)}
+                    className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
+                    style={{ 
+                      background: showClearData ? 'rgba(239,68,68,0.2)' : 'rgba(30,41,59,0.5)', 
+                      borderColor: showClearData ? 'rgba(239,68,68,0.5)' : 'rgba(51,65,85,0.5)', 
+                      color: showClearData ? '#f87171' : '#94a3b8' 
+                    }}
+                    title="Clear column data"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <button 
                     onClick={() => setShowFilters(!showFilters)}
                     className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
                     style={{ 
@@ -2800,6 +2949,98 @@ Respond with ONLY a JSON array:
                 </div>
               )}
               
+              {/* Add Stocks Panel */}
+              {showAddStocks && (
+                <div className="p-4 border-b border-slate-800/50" style={{ background: 'rgba(16,185,129,0.05)' }}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Plus className="w-4 h-4 text-emerald-400" />
+                    <span className="text-sm font-semibold text-emerald-400">Add Stocks Manually</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      value={addStocksInput}
+                      onChange={e => setAddStocksInput(e.target.value)}
+                      placeholder="Enter tickers separated by commas (e.g., AAPL, MSFT, GOOGL)"
+                      className="flex-1 rounded-lg px-4 py-2 text-sm border outline-none"
+                      style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(16,185,129,0.3)', color: '#e2e8f0' }}
+                      onKeyDown={e => e.key === 'Enter' && addManualStocks()}
+                    />
+                    <button
+                      onClick={addManualStocks}
+                      disabled={isAddingStocks || !addStocksInput.trim()}
+                      className="px-4 py-2 rounded-lg text-sm font-medium border flex items-center gap-2"
+                      style={{ 
+                        background: 'rgba(16,185,129,0.2)', 
+                        borderColor: 'rgba(16,185,129,0.5)', 
+                        color: '#34d399',
+                        opacity: isAddingStocks || !addStocksInput.trim() ? 0.5 : 1
+                      }}
+                    >
+                      {isAddingStocks ? (
+                        <><RefreshCw className="w-4 h-4 animate-spin" />Adding...</>
+                      ) : (
+                        <><Plus className="w-4 h-4" />Add Stocks</>
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">Stocks will be fetched from Polygon API and added to the table</p>
+                </div>
+              )}
+              
+              {/* Clear Data Panel */}
+              {showClearData && (
+                <div className="p-4 border-b border-slate-800/50" style={{ background: 'rgba(239,68,68,0.05)' }}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                    <span className="text-sm font-semibold text-red-400">Clear AI Scan Data</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => clearColumnData('conviction')}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 hover:bg-opacity-30 transition-colors"
+                      style={{ background: 'rgba(16,185,129,0.1)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Conviction Data
+                    </button>
+                    <button
+                      onClick={() => clearColumnData('upside')}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 hover:bg-opacity-30 transition-colors"
+                      style={{ background: 'rgba(236,72,153,0.1)', borderColor: 'rgba(236,72,153,0.3)', color: '#f472b6' }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Upside 8mo Data
+                    </button>
+                    <button
+                      onClick={() => clearColumnData('technical')}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 hover:bg-opacity-30 transition-colors"
+                      style={{ background: 'rgba(99,102,241,0.1)', borderColor: 'rgba(99,102,241,0.3)', color: '#a5b4fc' }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      C&H Technical Data
+                    </button>
+                    <button
+                      onClick={() => clearColumnData('singularity')}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 hover:bg-opacity-30 transition-colors"
+                      style={{ background: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.3)', color: '#fbbf24' }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Singularity Data
+                    </button>
+                    <button
+                      onClick={() => clearColumnData('all')}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 hover:bg-opacity-30 transition-colors"
+                      style={{ background: 'rgba(239,68,68,0.2)', borderColor: 'rgba(239,68,68,0.5)', color: '#f87171' }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Clear ALL AI Data
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">This will clear the selected scan data for all stocks. Stock prices and basic info will remain.</p>
+                </div>
+              )}
+              
                 <div className="px-4 py-2 border-b border-slate-800/50 flex items-center gap-4 text-xs text-slate-500 font-medium" style={{ background: 'rgba(15,23,42,0.5)' }}>
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
@@ -2830,11 +3071,11 @@ Respond with ONLY a JSON array:
                   </div>
                   <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'mattyPrediction' ? 'compositeScore' : 'mattyPrediction')}
-                    title="Matty 8-Month Prediction"
+                    onClick={() => setSortBy(sortBy === 'upsidePrediction' ? 'compositeScore' : 'upsidePrediction')}
+                    title="Upside 8-Month Prediction"
                   >
                     8mo
-                    {sortBy === 'mattyPrediction' && <span className="text-pink-400">↓</span>}
+                    {sortBy === 'upsidePrediction' && <span className="text-pink-400">↓</span>}
                   </div>
                   <div 
                     className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -2877,7 +3118,7 @@ Respond with ONLY a JSON array:
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
                             {s.aiAnalysis && <Sparkles className="w-4 h-4 text-emerald-400" title={`Conviction: ${s.insiderConviction}%`} />}
                             {s.technicalAnalysis && <Activity className="w-4 h-4 text-indigo-400" title={`C&H: ${s.cupHandleScore}`} />}
-                            {s.mattyAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Matty: ${s.mattyPrediction > 0 ? '+' : ''}${s.mattyPrediction}% in 8mo`} />}
+                            {s.upsideAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Upside: ${s.upsidePrediction > 0 ? '+' : ''}${s.upsidePrediction}% in 8mo`} />}
                             {s.singularityScore >= 70 && <Zap className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
@@ -2921,17 +3162,17 @@ Respond with ONLY a JSON array:
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        {/* 8-Month Prediction (Matty Buffet) */}
+                        {/* 8-Month Prediction (Upside Scan) */}
                         <div className="w-12 text-center">
-                          {s.mattyPrediction !== null && s.mattyPrediction !== undefined ? (
+                          {s.upsidePrediction !== null && s.upsidePrediction !== undefined ? (
                             <span 
                               className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
-                                background: s.mattyPrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.mattyPrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.mattyPrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
-                                color: s.mattyPrediction >= 200 ? '#34d399' : s.mattyPrediction >= 50 ? '#6ee7b7' : s.mattyPrediction >= 0 ? '#fbbf24' : '#f87171'
+                                background: s.upsidePrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.upsidePrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.upsidePrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
+                                color: s.upsidePrediction >= 200 ? '#34d399' : s.upsidePrediction >= 50 ? '#6ee7b7' : s.upsidePrediction >= 0 ? '#fbbf24' : '#f87171'
                               }}
                             >
-                              {s.mattyPrediction > 0 ? '+' : ''}{s.mattyPrediction}%
+                              {s.upsidePrediction > 0 ? '+' : ''}{s.upsidePrediction}%
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
@@ -2993,21 +3234,21 @@ Respond with ONLY a JSON array:
                             </div>
                           )}
                           
-                          {s.mattyAnalysis && (
+                          {s.upsideAnalysis && (
                             <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.08)', borderColor: 'rgba(236,72,153,0.3)' }}>
                               <h4 className="text-sm font-semibold text-pink-400 mb-2 flex items-center gap-2">
                                 <TrendingUp className="w-4 h-4" />
-                                Matty Buffet's 8-Month Outlook
-                                {s.mattyPrediction !== null && (
+                                8-Month Upside Analysis
+                                {s.upsidePrediction !== null && (
                                   <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ 
-                                    background: s.mattyPrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.mattyPrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.mattyPrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', 
-                                    color: s.mattyPrediction >= 200 ? '#34d399' : s.mattyPrediction >= 50 ? '#6ee7b7' : s.mattyPrediction >= 0 ? '#fbbf24' : '#f87171' 
+                                    background: s.upsidePrediction >= 200 ? 'rgba(16,185,129,0.3)' : s.upsidePrediction >= 50 ? 'rgba(16,185,129,0.2)' : s.upsidePrediction >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', 
+                                    color: s.upsidePrediction >= 200 ? '#34d399' : s.upsidePrediction >= 50 ? '#6ee7b7' : s.upsidePrediction >= 0 ? '#fbbf24' : '#f87171' 
                                   }}>
-                                    {s.mattyPrediction > 0 ? '+' : ''}{s.mattyPrediction}% in 8 months
+                                    {s.upsidePrediction > 0 ? '+' : ''}{s.upsidePrediction}% in 8 months
                                   </span>
                                 )}
                               </h4>
-                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.mattyAnalysis}</p>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.upsideAnalysis}</p>
                             </div>
                           )}
                           
@@ -3026,9 +3267,9 @@ Respond with ONLY a JSON array:
                             </div>
                           )}
                           
-                          {!s.aiAnalysis && !s.mattyAnalysis && !s.technicalAnalysis && i < 10 && (
+                          {!s.aiAnalysis && !s.upsideAnalysis && !s.technicalAnalysis && i < 10 && (
                             <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
-                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-400" />Run Conviction, Matty 8mo, or C&H Scan to analyze</p>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-400" />Run Conviction, Upside 8mo, or C&H Scan to analyze</p>
                             </div>
                           )}
                           

@@ -1549,8 +1549,6 @@ export default function StockResearchApp() {
     const totalBatches = Math.ceil(stocksToScan.length / batchSize);
     setSupplyChainProgress({ current: 0, total: stocksToScan.length });
     
-    let updatedStocks = [...stocks];
-    
     for (let batch = 0; batch < totalBatches; batch++) {
       const startIdx = batch * batchSize;
       const batchStocks = stocksToScan.slice(startIdx, startIdx + batchSize);
@@ -1599,22 +1597,24 @@ Respond with ONLY a JSON array:
             console.warn('Failed to parse Singularity response:', e);
           }
           
-          // Update stocks with Singularity score and categories
-          scores.forEach(item => {
-            updatedStocks = updatedStocks.map(s => 
-              s.ticker === item.ticker ? {
-                ...s,
-                singularityScore: Math.min(100, Math.max(0, item.singularity || 0)),
-                isBank: item.isBank || false,
-                isFood: item.isFood || false,
-                isHealthcare: item.isHealthcare || false,
-                isInsurance: item.isInsurance || false,
-                isREIT: item.isREIT || false
-              } : s
-            );
-          });
-          
-          setStocks(updatedStocks);
+          // Update stocks with Singularity score and categories using functional update
+          if (scores.length > 0) {
+            setStocks(prev => prev.map(s => {
+              const scoreData = scores.find(item => item.ticker === s.ticker);
+              if (scoreData) {
+                return {
+                  ...s,
+                  singularityScore: Math.min(100, Math.max(0, scoreData.singularity || 0)),
+                  isBank: scoreData.isBank || false,
+                  isFood: scoreData.isFood || false,
+                  isHealthcare: scoreData.isHealthcare || false,
+                  isInsurance: scoreData.isInsurance || false,
+                  isREIT: scoreData.isREIT || false
+                };
+              }
+              return s;
+            }));
+          }
         }
       } catch (e) {
         console.error('Singularity scan batch failed:', e);
@@ -1625,16 +1625,18 @@ Respond with ONLY a JSON array:
       }
     }
     
-    // Recalculate scores
-    const reScored = calcScores(updatedStocks, weights, aiWeights);
-    setStocks(reScored);
+    // Recalculate scores using functional update
+    setStocks(prev => calcScores(prev, weights, aiWeights));
     
     // Save to session
-    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
-    if (currentSessionId) {
-      saveSession(currentSessionId, reScored, scanStats);
-      setSessions(getAllSessions());
-    }
+    setStocks(prev => {
+      const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: prev.length };
+      if (currentSessionId) {
+        saveSession(currentSessionId, prev, scanStats);
+        setSessions(getAllSessions());
+      }
+      return prev;
+    });
     
     setIsScanningSupplyChain(false);
     setSupplyChainProgress({ current: 0, total: 0 });
@@ -1997,7 +1999,22 @@ Respond with ONLY a JSON array:
                   );
                 });
                 
-                setStocks([...updatedStocks]);
+                // Use functional update to preserve other parallel scan results
+                setStocks(prev => prev.map(s => {
+                  const updated = updatedStocks.find(u => u.ticker === s.ticker);
+                  if (updated && updated.singularityScore !== undefined) {
+                    return {
+                      ...s,
+                      singularityScore: updated.singularityScore,
+                      isBank: updated.isBank,
+                      isFood: updated.isFood,
+                      isHealthcare: updated.isHealthcare,
+                      isInsurance: updated.isInsurance,
+                      isREIT: updated.isREIT
+                    };
+                  }
+                  return s;
+                }));
               }
             } else {
               console.error('Singularity API error:', response.status);

@@ -441,6 +441,62 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
 }
 
 // ============================================
+// MATTY BUFFET ANALYSIS - 4X Potential
+// ============================================
+async function getMattyAnalysis(stock, customPrompt) {
+  console.log(`Running Matty Buffet analysis for ${stock.ticker}...`);
+  
+  try {
+    const stockInfo = `
+STOCK: ${stock.ticker} - ${stock.name}
+SECTOR: ${stock.sector || 'Unknown'}
+PRICE: $${stock.price?.toFixed(2)}
+MARKET CAP: $${stock.marketCap}M
+52-WEEK LOW: $${stock.low52?.toFixed(2)}
+52-WEEK HIGH: $${stock.high52?.toFixed(2)}
+FROM 52W LOW: +${stock.fromLow?.toFixed(1)}%
+NET CASH: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'} ${stock.netCash > 0 ? '(CASH RICH!)' : stock.netCash < 0 ? '(IN DEBT)' : ''}
+SINGULARITY SCORE: ${stock.singularityScore || 'Not scored'}
+LAST INSIDER BUY: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
+`;
+
+    const prompt = `${customPrompt}
+
+${stockInfo}
+
+Give your Matty Buffet take on this stock. Be bold and specific about why you love it or hate it for singularity plays.`;
+
+    const response = await fetch("/api/grok", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, isMatty: true })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      return { mattyAnalysis: `API Error: ${errorData.error || response.status}`, fourXPotential: null };
+    }
+
+    const data = await response.json();
+    
+    // Extract 4X_POTENTIAL from the response
+    let fourXPotential = null;
+    const match = data.analysis?.match(/4X_POTENTIAL[:\s]*(\d+)/i);
+    if (match) {
+      fourXPotential = Math.min(100, Math.max(0, parseInt(match[1])));
+    }
+    
+    // Clean up the analysis text
+    let analysis = data.analysis?.replace(/4X_POTENTIAL[:\s]*\d+%?/gi, '').trim() || 'No response';
+    
+    return { mattyAnalysis: analysis, fourXPotential };
+  } catch (e) {
+    console.error('Matty analysis failed:', e);
+    return { mattyAnalysis: `Error: ${e.message}`, fourXPotential: null };
+  }
+}
+
+// ============================================
 // ORACLE ANALYSIS - The Singularity Capitalist
 // ============================================
 async function getOracleAnalysis(stock) {
@@ -736,6 +792,7 @@ export default function StockResearchApp() {
   const [selected, setSelected] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
+  const [isAnalyzingMatty, setIsAnalyzingMatty] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
   const [isRunningOracle, setIsRunningOracle] = useState(false);
@@ -743,12 +800,46 @@ export default function StockResearchApp() {
   const [showDiscovery, setShowDiscovery] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [showFullSpectrumModal, setShowFullSpectrumModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [mattyProgress, setMattyProgress] = useState({ current: 0, total: 0 });
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
   const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
+  
+  // Matty Buffet prompt (editable)
+  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a "new age" Warren Buffet who specializes in high-risk, high-reward plays focused on the SINGULARITY revolution. You're extremely optimistic about stocks positioned for the convergence of AI, robotics, and abundant energy.
+
+YOUR SPECIALTY SECTORS (you get EXCITED about these):
+- Solar & renewable energy
+- Robotics & automation  
+- Battery technology & energy storage
+- Rare earth materials & mining
+- Semiconductor supply chain
+- Nuclear energy (fission & fusion)
+- AI infrastructure (data centers, cooling, power)
+- Humanoid robot components (actuators, sensors, motors)
+
+YOUR ANALYSIS STYLE:
+- You make BOLD predictions when a stock has everything going for it
+- You're brutally honest about stocks with no singularity potential
+- You consider: market position, supply chain importance, management, financials, and industry tailwinds
+- You think in terms of "Will robots/AI need this? Will the energy explosion need this?"
+
+SCORING (4X_POTENTIAL - chance this stock 4x's in the next year):
+- 0-10%: No chance, wrong sector or fundamentally broken
+- 11-30%: Unlikely, weak position or too much competition
+- 31-50%: Possible if sector explodes and they execute well
+- 51-70%: Good chance, well-positioned for singularity tailwinds
+- 71-85%: Strong chance, critical supplier with solid fundamentals
+- 86-100%: Near certain, perfect storm of position + timing + fundamentals
+
+Be conversational and give your honest Matty Buffet take. End with:
+4X_POTENTIAL: [number 0-100]`;
+
+  const [mattyPrompt, setMattyPrompt] = useState(DEFAULT_MATTY_PROMPT);
   
   // Session management
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -954,6 +1045,52 @@ export default function StockResearchApp() {
     setIsAnalyzingAI(false);
     setAiProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
+  };
+
+  // Matty Buffet Analysis - 4X Potential scoring
+  const runMattyAnalysis = async (stocksInOrder) => {
+    if (isAnalyzingMatty || stocks.length === 0) return;
+    
+    setIsAnalyzingMatty(true);
+    setError(null);
+    
+    const orderedStocks = stocksInOrder || stocks;
+    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
+    setMattyProgress({ current: 0, total: stocksToAnalyze.length });
+    
+    let updatedStocks = [...stocks];
+    
+    for (let i = 0; i < stocksToAnalyze.length; i++) {
+      setMattyProgress({ current: i + 1, total: stocksToAnalyze.length });
+      setStatus({ type: 'loading', msg: `Matty analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+      
+      const result = await getMattyAnalysis(stocksToAnalyze[i], mattyPrompt);
+      
+      updatedStocks = updatedStocks.map(s => 
+        s.ticker === stocksToAnalyze[i].ticker ? { 
+          ...s, 
+          mattyAnalysis: result.mattyAnalysis,
+          fourXPotential: result.fourXPotential
+        } : s
+      );
+      setStocks(updatedStocks);
+      
+      if (i < stocksToAnalyze.length - 1) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    
+    // Save to current session
+    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
+    if (currentSessionId) {
+      saveSession(currentSessionId, updatedStocks, scanStats);
+      setSessions(getAllSessions());
+    }
+    
+    setIsAnalyzingMatty(false);
+    setMattyProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Matty analysis complete` });
   };
 
   // Batch scan for SINGULARITY SCORE (0-100)
@@ -1555,6 +1692,9 @@ Respond with ONLY a JSON array, no markdown, no explanation:
       if (sortBy === 'singularityScore') {
         return (b.singularityScore ?? -1) - (a.singularityScore ?? -1);
       }
+      if (sortBy === 'fourXPotential') {
+        return (b.fourXPotential ?? -1) - (a.fourXPotential ?? -1);
+      }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
@@ -1631,6 +1771,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
             
             <button onClick={() => setShowDiscovery(!showDiscovery)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showDiscovery ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showDiscovery ? '#6ee7b7' : '#94a3b8' }}><Radar className="w-4 h-4" />Discovery</button>
             <button onClick={() => setShowWeights(!showWeights)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showWeights ? 'rgba(245,158,11,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showWeights ? '#fcd34d' : '#94a3b8' }}><Sliders className="w-4 h-4" />Weights</button>
+            <button onClick={() => setShowSettings(!showSettings)} className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2" style={{ background: showSettings ? 'rgba(236,72,153,0.2)' : 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: showSettings ? '#f472b6' : '#94a3b8' }}><Sliders className="w-4 h-4" />Settings</button>
             
             {stocks.length > 0 && (
               <>
@@ -1685,6 +1826,31 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                     <><RefreshCw className="w-4 h-4 animate-spin" />Analyzing {aiProgress.current}/{aiProgress.total}...</>
                   ) : (
                     <><Sparkles className="w-4 h-4" />Grok AI</>
+                  )}
+                </button>
+                
+                {/* Matty Buffet Button */}
+                <button 
+                  onClick={() => {
+                    const currentView = [...stocks]
+                      .filter(s => matchesCategory(s, sectorFilter))
+                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .sort((a, b) => b.compositeScore - a.compositeScore);
+                    runMattyAnalysis(currentView);
+                  }} 
+                  disabled={isAnalyzingMatty || isScanning || isScanningSupplyChain || isAnalyzingAI}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isAnalyzingMatty ? 'rgba(236,72,153,0.3)' : 'rgba(236,72,153,0.1)', 
+                    borderColor: 'rgba(236,72,153,0.3)', 
+                    color: '#f472b6',
+                    opacity: (isAnalyzingMatty || isScanning || isScanningSupplyChain || isAnalyzingAI) ? 0.7 : 1
+                  }}
+                >
+                  {isAnalyzingMatty ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Matty {mattyProgress.current}/{mattyProgress.total}...</>
+                  ) : (
+                    <><TrendingUp className="w-4 h-4" />Matty 4X</>
                   )}
                 </button>
                 
@@ -1851,6 +2017,53 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                 style={{ background: 'linear-gradient(90deg, #f59e0b, #f97316)', color: 'white' }}
               >
                 <Play className="w-4 h-4" />Start Full Spectrum
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal - Matty Buffet Prompt Editor */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="card rounded-2xl border border-slate-700 p-6 w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden flex flex-col" style={{ background: 'rgba(15,23,42,0.98)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2"><TrendingUp className="w-6 h-6 text-pink-400" />Matty Buffet Settings</h2>
+              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <p className="text-sm text-slate-400 mb-4">Customize Matty Buffet's analysis prompt. He's a "new age" Warren Buffet focused on singularity stocks.</p>
+            
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <label className="text-sm text-slate-300 mb-2 block">Matty's System Prompt</label>
+              <textarea 
+                value={mattyPrompt}
+                onChange={e => setMattyPrompt(e.target.value)}
+                className="flex-1 w-full rounded-lg px-3 py-3 text-sm border outline-none resize-none"
+                style={{ 
+                  background: 'rgba(30,41,59,0.5)', 
+                  borderColor: 'rgba(236,72,153,0.3)', 
+                  color: '#e2e8f0',
+                  minHeight: '300px'
+                }}
+                placeholder="Enter Matty Buffet's system prompt..."
+              />
+            </div>
+            
+            <div className="flex gap-3 mt-4">
+              <button 
+                onClick={() => setMattyPrompt(DEFAULT_MATTY_PROMPT)} 
+                className="px-4 py-2.5 rounded-xl text-sm font-medium border"
+                style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}
+              >
+                Reset to Default
+              </button>
+              <button 
+                onClick={() => setShowSettings(false)} 
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold"
+                style={{ background: 'linear-gradient(90deg, #ec4899, #f472b6)', color: 'white' }}
+              >
+                Save & Close
               </button>
             </div>
           </div>
@@ -2078,10 +2291,11 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   </div>
                   <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'upsidePct' ? 'compositeScore' : 'upsidePct')}
+                    onClick={() => setSortBy(sortBy === 'fourXPotential' ? 'compositeScore' : 'fourXPotential')}
+                    title="Matty Buffet 4X Potential"
                   >
-                    Up%
-                    {sortBy === 'upsidePct' && <span className="text-emerald-400">↓</span>}
+                    4X%
+                    {sortBy === 'fourXPotential' && <span className="text-pink-400">↓</span>}
                   </div>
                   <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -2122,6 +2336,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
                             {s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="AI Analysis" />}
+                            {s.mattyAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Matty: ${s.fourXPotential}% 4X potential`} />}
                             {s.singularityScore >= 70 && <Zap className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
@@ -2145,17 +2360,18 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        {/* Upside % */}
+                        {/* 4X Potential (Matty Buffet) */}
                         <div className="w-12 text-center">
-                          {s.upsidePct !== null && s.upsidePct !== undefined ? (
+                          {s.fourXPotential !== null && s.fourXPotential !== undefined ? (
                             <span 
                               className="text-xs font-bold mono px-1 py-0.5 rounded"
                               style={{ 
-                                background: s.upsidePct >= 50 ? 'rgba(16,185,129,0.2)' : s.upsidePct >= 0 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
-                                color: s.upsidePct >= 50 ? '#34d399' : s.upsidePct >= 0 ? '#fbbf24' : '#f87171'
+                                background: s.fourXPotential >= 70 ? 'rgba(236,72,153,0.3)' : s.fourXPotential >= 40 ? 'rgba(236,72,153,0.15)' : 'rgba(51,65,85,0.2)',
+                                color: s.fourXPotential >= 70 ? '#f472b6' : s.fourXPotential >= 40 ? '#ec4899' : '#64748b'
                               }}
+                              title={s.mattyAnalysis ? 'Click to see Matty analysis' : ''}
                             >
-                              {s.upsidePct > 0 ? '+' : ''}{s.upsidePct}%
+                              {s.fourXPotential}%
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
@@ -2209,9 +2425,24 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             </div>
                           )}
                           
-                          {!s.aiAnalysis && i < 10 && (
+                          {s.mattyAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.08)', borderColor: 'rgba(236,72,153,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-pink-400 mb-2 flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4" />
+                                Matty Buffet's Take
+                                {s.fourXPotential !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ background: s.fourXPotential >= 70 ? 'rgba(16,185,129,0.2)' : s.fourXPotential >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', color: s.fourXPotential >= 70 ? '#34d399' : s.fourXPotential >= 40 ? '#fbbf24' : '#f87171' }}>
+                                    {s.fourXPotential}% 4X Potential
+                                  </span>
+                                )}
+                              </h4>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.mattyAnalysis}</p>
+                            </div>
+                          )}
+                          
+                          {!s.aiAnalysis && !s.mattyAnalysis && i < 10 && (
                             <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
-                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Click "Grok AI (Top 10)" to analyze</p>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Click "Grok AI" or "Matty 4X" to analyze</p>
                             </div>
                           )}
                           

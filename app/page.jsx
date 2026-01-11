@@ -1735,9 +1735,6 @@ ${stockList}
 Respond with ONLY a JSON array:
 [{"ticker":"ABC","singularity":85,"isBank":false,"isFood":false,"isHealthcare":false,"isInsurance":false,"isREIT":false}]`;
 
-Respond with ONLY a JSON array, no markdown, no explanation:
-[{"ticker":"ABC","singularity":85},{"ticker":"XYZ","singularity":12}]`;
-
           try {
             console.log(`Singularity batch ${batch + 1}/${totalBatches} - analyzing ${batchStocks.length} stocks`);
             

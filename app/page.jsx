@@ -24,45 +24,14 @@ const STOCK_LIMITS = {
   0: 'All stocks'
 };
 
-// Singularity Supply Chain Buckets
-const SINGULARITY_BUCKETS = {
-  compute: { 
-    name: 'COMPUTE', 
-    icon: Cpu, 
-    color: '#8B5CF6',
-    description: 'Semiconductors, photonics, liquid cooling, data center hardware'
-  },
-  energy: { 
-    name: 'ENERGY', 
-    icon: Atom, 
-    color: '#F59E0B',
-    description: 'Nuclear, fusion supply, transformers, copper, next-gen batteries'
-  },
-  robotics: { 
-    name: 'ROBOTICS', 
-    icon: Bot, 
-    color: '#10B981',
-    description: 'Actuators, sensors, rare earth magnets, humanoid components'
-  },
-  agi_interface: { 
-    name: 'AGI_INTERFACE', 
-    icon: Eye, 
-    color: '#EC4899',
-    description: 'BCI (Brain-Computer Interface), AR/VR hardware, haptics'
-  }
-};
-
-// Category filters (updated for Singularity)
+// Category filters
 const STOCK_CATEGORIES = {
   all: { name: 'All Stocks', keywords: [] },
-  compute: { name: 'Compute (7+)', keywords: [], singularityBucket: true },
-  energy: { name: 'Energy (7+)', keywords: [], singularityBucket: true },
-  robotics: { name: 'Robotics (7+)', keywords: [], singularityBucket: true },
-  agi_interface: { name: 'AGI Interface (7+)', keywords: [], singularityBucket: true },
-  singularity_all: { name: 'Any Singularity (7+)', keywords: [], singularityBucket: true },
+  singularity: { name: 'Singularity (70+)', keywords: [], singularityFilter: true },
   tech: { name: 'Tech', keywords: ['software', 'computer', 'semiconductor', 'electronic', 'technology', 'data processing', 'internet', 'cloud', 'cyber', 'digital'] },
   biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
-  energy_traditional: { name: 'Energy (Traditional)', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
+  energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
+  finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
 };
 
 const discoveryAgents = [
@@ -71,7 +40,6 @@ const discoveryAgents = [
   { id: 'technicalScanner', name: 'Technical Scanner', icon: Activity, color: '#F59E0B', coverage: '52-week analysis' },
   { id: 'insiderScanner', name: 'Insider Scanner', icon: Users, color: '#10B981', coverage: 'SEC Form 4' },
   { id: 'financialScanner', name: 'Financial Scanner', icon: Banknote, color: '#EC4899', coverage: 'Cash & Debt' },
-  { id: 'optionsScanner', name: 'Options Heat', icon: Flame, color: '#EF4444', coverage: 'Unusual activity' },
 ];
 
 const analysisAgents = [
@@ -769,6 +737,7 @@ export default function StockResearchApp() {
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
+  const [isScanningOptions, setIsScanningOptions] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
   const [isRunningOracle, setIsRunningOracle] = useState(false);
   const [showWeights, setShowWeights] = useState(false);
@@ -781,7 +750,7 @@ export default function StockResearchApp() {
   const [sectorFilter, setSectorFilter] = useState('all');
   const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
-  const [oracleProgress, setOracleProgress] = useState({ current: 0, total: 0 });
+  const [optionsProgress, setOptionsProgress] = useState({ current: 0, total: 0 });
   
   // Session management
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -790,19 +759,13 @@ export default function StockResearchApp() {
   // Scan settings
   const [stockLimit, setStockLimit] = useState(100);
   
-  // Full spectrum scan settings with Circuit Breakers
+  // Full spectrum scan settings
   const [spectrumSettings, setSpectrumSettings] = useState({
     baseStockLimit: 500,
-    supplyChainEnabled: true,
+    singularityEnabled: true,
     grokEnabled: true,
     grokCount: 25,
-    oracleEnabled: true,
-    oracleCount: 10,
-    // Circuit Breakers (Gatekeepers)
-    skipHighDebt: true,
-    skipLowInsider: false,
-    skipLowSingularity: true,
-    minSingularityScore: 7
+    grokOnlySingularity70: false  // Only analyze stocks with singularity >= 70
   });
 
   // Filter by category keywords or Singularity buckets
@@ -811,20 +774,9 @@ export default function StockResearchApp() {
     const category = STOCK_CATEGORIES[categoryKey];
     if (!category) return true;
     
-    // Singularity bucket categories (score >= 7)
-    if (category.singularityBucket) {
-      const scores = stock.singularityScores || {};
-      if (categoryKey === 'compute') return (scores.compute || 0) >= 7;
-      if (categoryKey === 'energy') return (scores.energy || 0) >= 7;
-      if (categoryKey === 'robotics') return (scores.robotics || 0) >= 7;
-      if (categoryKey === 'agi_interface') return (scores.agi_interface || 0) >= 7;
-      if (categoryKey === 'singularity_all') {
-        return (scores.compute || 0) >= 7 || 
-               (scores.energy || 0) >= 7 || 
-               (scores.robotics || 0) >= 7 || 
-               (scores.agi_interface || 0) >= 7;
-      }
-      return false;
+    // Singularity category - only show stocks with score >= 70
+    if (category.singularityFilter) {
+      return (stock.singularityScore || 0) >= 70;
     }
     
     // Keyword-based categories
@@ -1006,14 +958,14 @@ export default function StockResearchApp() {
     setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
   };
 
-  // Batch scan for SINGULARITY SUPPLY CHAIN categorization (20 stocks at a time)
-  const runSupplyChainScan = async () => {
+  // Batch scan for SINGULARITY SCORE (0-100)
+  const runSingularityScan = async () => {
     if (isScanningSupplyChain || stocks.length === 0) return;
     
     setIsScanningSupplyChain(true);
     setError(null);
     
-    const batchSize = 15; // Smaller batches for more accurate scoring
+    const batchSize = 15;
     const totalBatches = Math.ceil(stocks.length / batchSize);
     setSupplyChainProgress({ current: 0, total: stocks.length });
     
@@ -1024,35 +976,32 @@ export default function StockResearchApp() {
       const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
       
       setSupplyChainProgress({ current: startIdx, total: stocks.length });
-      setStatus({ type: 'loading', msg: `Scanning Singularity supply chains... ${startIdx}/${stocks.length}` });
+      setStatus({ type: 'loading', msg: `Scanning Singularity relevance... ${startIdx}/${stocks.length}` });
       
-      // Build batch prompt for Singularity buckets
       const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
       
-      const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, Robotics, and Infinite Energy.
+      const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, advanced robotics, and abundant energy that will transform civilization.
 
-Score each stock from 0-10 on how CRITICAL they are to each supply chain bucket:
+Score each stock from 0-100 on how CRITICAL they are to enabling the singularity across these supply chains:
 
-COMPUTE (0-10): Semiconductors, photonics, liquid cooling, quantum computing, data center hardware, AI chips, GPU suppliers, chip packaging, advanced materials for chips.
+COMPUTE & SEMIS: Chips (GPUs, AI accelerators, custom silicon), lithography equipment, chip packaging, testing equipment, advanced materials, photonics, quantum computing hardware.
 
-ENERGY (0-10): Nuclear (fission/fusion), uranium suppliers, transformers, electrical grid, copper/rare materials, next-gen batteries (solid state, sodium), power conversion, superconductors.
+INFRASTRUCTURE & POWER: Data centers, liquid cooling systems, copper suppliers, nuclear micro-reactors, transformers, electrical grid equipment, next-gen batteries (solid state), power conversion.
 
-ROBOTICS (0-10): Actuators, motors, sensors, lidar, rare earth magnets, precision bearings, humanoid robot components, industrial automation, drones, autonomous systems.
-
-AGI_INTERFACE (0-10): Brain-Computer Interface (BCI), neural implants, AR/VR hardware, haptic feedback, spatial computing, eye tracking, biometric sensors, neural sensors.
+EMBODIMENT (ROBOTICS): Actuators, precision motors, sensors (lidar, vision, touch), rare earth magnets for motors, precision bearings, humanoid robot components, drones, autonomous systems.
 
 SCORING GUIDE:
-0 = No relevance
-1-3 = Tangential/weak connection
-4-6 = Moderate supplier or indirect exposure
-7-8 = Important supplier, direct exposure
-9-10 = Critical/irreplaceable supplier, pure play
+0-20 = No meaningful connection to singularity supply chains
+21-40 = Tangential/indirect exposure
+41-60 = Moderate supplier, some relevance
+61-80 = Important supplier, significant exposure to singularity themes
+81-100 = Critical/irreplaceable supplier, pure play on singularity infrastructure
 
 STOCKS TO ANALYZE:
 ${stockList}
 
-Respond with ONLY a JSON array. Each object must have ticker and numeric scores (0-10):
-[{"ticker":"ABC","compute":8,"energy":2,"robotics":6,"agi_interface":0}]`;
+Respond with ONLY a JSON array. Each object must have ticker and a singularity score (0-100):
+[{"ticker":"ABC","singularity":85},{"ticker":"XYZ","singularity":12}]`;
 
       try {
         const response = await fetch("/api/grok", {
@@ -1073,17 +1022,12 @@ Respond with ONLY a JSON array. Each object must have ticker and numeric scores 
             console.warn('Failed to parse Singularity response:', e);
           }
           
-          // Update stocks with Singularity scores
+          // Update stocks with Singularity score
           scores.forEach(item => {
             updatedStocks = updatedStocks.map(s => 
               s.ticker === item.ticker ? {
                 ...s,
-                singularityScores: {
-                  compute: Math.min(10, Math.max(0, item.compute || 0)),
-                  energy: Math.min(10, Math.max(0, item.energy || 0)),
-                  robotics: Math.min(10, Math.max(0, item.robotics || 0)),
-                  agi_interface: Math.min(10, Math.max(0, item.agi_interface || 0))
-                }
+                singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
               } : s
             );
           });
@@ -1103,7 +1047,7 @@ Respond with ONLY a JSON array. Each object must have ticker and numeric scores 
     const reScored = calcScores(updatedStocks, weights, aiWeights);
     setStocks(reScored);
     
-    // Save updated stocks to current session
+    // Save to session
     const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
     if (currentSessionId) {
       saveSession(currentSessionId, reScored, scanStats);
@@ -1113,6 +1057,109 @@ Respond with ONLY a JSON array. Each object must have ticker and numeric scores 
     setIsScanningSupplyChain(false);
     setSupplyChainProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Singularity scan complete` });
+  };
+
+  // OPTIONS FLOW SCAN - Analyze unusual options activity for upside/downside signals
+  const runOptionsScan = async () => {
+    if (isScanningOptions || stocks.length === 0) return;
+    
+    setIsScanningOptions(true);
+    setError(null);
+    
+    const batchSize = 10;
+    const totalBatches = Math.ceil(stocks.length / batchSize);
+    setOptionsProgress({ current: 0, total: stocks.length });
+    
+    let updatedStocks = [...stocks];
+    
+    for (let batch = 0; batch < totalBatches; batch++) {
+      const startIdx = batch * batchSize;
+      const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
+      
+      setOptionsProgress({ current: startIdx, total: stocks.length });
+      setStatus({ type: 'loading', msg: `Scanning options flow... ${startIdx}/${stocks.length}` });
+      
+      const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} ($${s.price?.toFixed(2)}, MCap: $${s.marketCap}M)`).join('\n');
+      
+      const prompt = `You are an options flow analyst looking for unusual activity that signals potential big moves.
+
+For each stock, analyze what the TYPICAL options flow pattern would be and score:
+
+SHORT_TERM_SIGNAL (-100 to +100): 
+- Positive = unusual CALL buying, aggressive near-term bullish bets
+- Negative = unusual PUT buying, aggressive near-term bearish bets
+- Look for: large premium spent, unusual volume vs open interest, sweeps
+
+LONG_TERM_SIGNAL (-100 to +100):
+- Positive = LEAPS calls, long-dated bullish positioning
+- Negative = LEAPS puts, long-dated bearish positioning  
+- Look for: institutional accumulation patterns, roll-ups
+
+SCORING:
+-100 to -70: Extremely bearish options flow
+-69 to -30: Moderately bearish
+-29 to +29: Neutral/no unusual activity
++30 to +69: Moderately bullish
++70 to +100: Extremely bullish options flow
+
+Note: For small-cap stocks, options may be illiquid. Score 0 if no meaningful options market exists.
+
+STOCKS:
+${stockList}
+
+Respond with ONLY a JSON array:
+[{"ticker":"ABC","shortTerm":45,"longTerm":72},{"ticker":"XYZ","shortTerm":-30,"longTerm":15}]`;
+
+      try {
+        const response = await fetch("/api/grok", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          let scores = [];
+          try {
+            const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              scores = JSON.parse(jsonMatch[0]);
+            }
+          } catch (e) {
+            console.warn('Failed to parse options response:', e);
+          }
+          
+          scores.forEach(item => {
+            updatedStocks = updatedStocks.map(s => 
+              s.ticker === item.ticker ? {
+                ...s,
+                optionsShortTerm: Math.min(100, Math.max(-100, item.shortTerm || 0)),
+                optionsLongTerm: Math.min(100, Math.max(-100, item.longTerm || 0))
+              } : s
+            );
+          });
+          
+          setStocks(updatedStocks);
+        }
+      } catch (e) {
+        console.error('Options scan batch failed:', e);
+      }
+      
+      if (batch < totalBatches - 1) {
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+    
+    // Save to session
+    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
+    if (currentSessionId) {
+      saveSession(currentSessionId, updatedStocks, scanStats);
+      setSessions(getAllSessions());
+    }
+    
+    setIsScanningOptions(false);
+    setOptionsProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Options scan complete` });
   };
 
   // Run Oracle Analysis on filtered stocks
@@ -1383,12 +1430,12 @@ Respond with ONLY a JSON array. Each object must have ticker and numeric scores 
       
       setIsScanning(false);
       
-      // Phase 2: Supply Chain Tagging
-      if (spectrumSettings.supplyChainEnabled && currentStocks.length > 0) {
-        setFullSpectrumPhase('Tagging Supply Chains...');
+      // Phase 2: Singularity Scan
+      if (spectrumSettings.singularityEnabled && currentStocks.length > 0) {
+        setFullSpectrumPhase('Running Singularity Scan...');
         setIsScanningSupplyChain(true);
         
-        const batchSize = 20;
+        const batchSize = 15;
         const totalBatches = Math.ceil(currentStocks.length / batchSize);
         setSupplyChainProgress({ current: 0, total: currentStocks.length });
         
@@ -1399,20 +1446,25 @@ Respond with ONLY a JSON array. Each object must have ticker and numeric scores 
           const batchStocks = currentStocks.slice(startIdx, startIdx + batchSize);
           
           setSupplyChainProgress({ current: startIdx, total: currentStocks.length });
-          setStatus({ type: 'loading', msg: `Full Spectrum: Tagging supply chains... ${startIdx}/${currentStocks.length}` });
+          setStatus({ type: 'loading', msg: `Full Spectrum: Singularity scan... ${startIdx}/${currentStocks.length}` });
           
-          const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown sector'})`).join('\n');
+          const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
           
-          const prompt = `Categorize these ${batchStocks.length} stocks into supply chains. For EACH stock, determine if it belongs to:
-- SOLAR: Solar energy, solar panels, inverters, solar installation, photovoltaic, solar materials
-- BATTERIES: Batteries, lithium, energy storage, EV batteries, battery materials, battery tech
-- ROBOTICS: Robotics, automation, AI hardware, industrial robots, drones, autonomous systems
+          const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, advanced robotics, and abundant energy.
 
-Stocks:
+Score each stock from 0-100 on how CRITICAL they are to enabling the singularity:
+
+COMPUTE & SEMIS: Chips (GPUs, AI accelerators), lithography, chip packaging, testing equipment, photonics, quantum computing.
+INFRASTRUCTURE & POWER: Data centers, liquid cooling, copper, nuclear micro-reactors, transformers, next-gen batteries.
+EMBODIMENT (ROBOTICS): Actuators, motors, sensors, rare earth magnets, precision bearings, humanoid components, drones.
+
+SCORING: 0-20 = No connection | 21-40 = Tangential | 41-60 = Moderate | 61-80 = Important supplier | 81-100 = Critical/pure play
+
+STOCKS:
 ${stockList}
 
-Respond with ONLY a JSON array, no other text. Each object must have ticker and boolean fields:
-[{"ticker":"ABC","solar":false,"batteries":true,"robotics":false}]`;
+Respond with ONLY a JSON array:
+[{"ticker":"ABC","singularity":85}]`;
 
           try {
             const response = await fetch("/api/grok", {
@@ -1423,25 +1475,21 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
             
             if (response.ok) {
               const data = await response.json();
-              let categories = [];
+              let scores = [];
               try {
                 const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
                 if (jsonMatch) {
-                  categories = JSON.parse(jsonMatch[0]);
+                  scores = JSON.parse(jsonMatch[0]);
                 }
               } catch (e) {
-                console.warn('Failed to parse supply chain response:', e);
+                console.warn('Failed to parse singularity response:', e);
               }
               
-              categories.forEach(cat => {
+              scores.forEach(item => {
                 updatedStocks = updatedStocks.map(s => 
-                  s.ticker === cat.ticker ? {
+                  s.ticker === item.ticker ? {
                     ...s,
-                    supplyChain: {
-                      solar: cat.solar || false,
-                      batteries: cat.batteries || false,
-                      robotics: cat.robotics || false
-                    }
+                    singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
                   } : s
                 );
               });
@@ -1449,11 +1497,11 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               setStocks(updatedStocks);
             }
           } catch (e) {
-            console.error('Supply chain batch failed:', e);
+            console.error('Singularity scan batch failed:', e);
           }
           
           if (batch < totalBatches - 1) {
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 1500));
           }
         }
         
@@ -1467,11 +1515,17 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         setFullSpectrumPhase('Running Grok AI Analysis...');
         setIsAnalyzingAI(true);
         
+        // Filter to only singularity 70+ if option enabled
+        let stocksPool = currentStocks;
+        if (spectrumSettings.grokOnlySingularity70) {
+          stocksPool = currentStocks.filter(s => (s.singularityScore || 0) >= 70);
+        }
+        
         // grokCount of 0 means "all stocks"
         const countToAnalyze = spectrumSettings.grokCount === 0 
-          ? currentStocks.length 
-          : Math.min(spectrumSettings.grokCount, currentStocks.length);
-        const stocksToAnalyze = currentStocks.slice(0, countToAnalyze);
+          ? stocksPool.length 
+          : Math.min(spectrumSettings.grokCount, stocksPool.length);
+        const stocksToAnalyze = stocksPool.slice(0, countToAnalyze);
         setAiProgress({ current: 0, total: stocksToAnalyze.length });
         
         let updatedStocks = [...currentStocks];
@@ -1580,18 +1634,14 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         const chB = b.cupHandleScore ?? -1;
         return chB - chA;
       }
-      if (sortBy === 'singularity') {
-        const getMaxSingularity = (s) => {
-          const scores = s.singularityScores || {};
-          return Math.max(scores.compute || 0, scores.energy || 0, scores.robotics || 0, scores.agi_interface || 0);
-        };
-        return getMaxSingularity(b) - getMaxSingularity(a);
+      if (sortBy === 'singularityScore') {
+        return (b.singularityScore ?? -1) - (a.singularityScore ?? -1);
       }
-      if (sortBy === 'swingTradeScore') {
-        return (b.swingTradeScore ?? -1) - (a.swingTradeScore ?? -1);
+      if (sortBy === 'optionsShortTerm') {
+        return (b.optionsShortTerm ?? -999) - (a.optionsShortTerm ?? -999);
       }
-      if (sortBy === 'oracleConviction') {
-        return (b.oracleConviction ?? -1) - (a.oracleConviction ?? -1);
+      if (sortBy === 'optionsLongTerm') {
+        return (b.optionsLongTerm ?? -999) - (a.optionsLongTerm ?? -999);
       }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
@@ -1728,7 +1778,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                 
                 {/* Supply Chain Scan Button */}
                 <button 
-                  onClick={runSupplyChainScan} 
+                  onClick={runSingularityScan} 
                   disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
@@ -1739,9 +1789,28 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                   }}
                 >
                   {isScanningSupplyChain ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" />Tagging {supplyChainProgress.current}/{supplyChainProgress.total}...</>
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Scanning {supplyChainProgress.current}/{supplyChainProgress.total}...</>
                   ) : (
-                    <><Zap className="w-4 h-4" />Tag Supply Chains</>
+                    <><Zap className="w-4 h-4" />Singularity Scan</>
+                  )}
+                </button>
+                
+                {/* Options Scan Button */}
+                <button 
+                  onClick={runOptionsScan} 
+                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain || isScanningOptions}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isScanningOptions ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
+                    borderColor: 'rgba(239,68,68,0.3)', 
+                    color: '#f87171',
+                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain || isScanningOptions) ? 0.7 : 1
+                  }}
+                >
+                  {isScanningOptions ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Scanning {optionsProgress.current}/{optionsProgress.total}...</>
+                  ) : (
+                    <><Activity className="w-4 h-4" />Options Flow</>
                   )}
                 </button>
               </>
@@ -1814,16 +1883,33 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
                 <div className="flex items-center gap-2">
                   <Zap className="w-4 h-4 text-amber-400" />
-                  <span className="text-sm text-slate-200">Tag Supply Chains</span>
+                  <span className="text-sm text-slate-200">Singularity Scan</span>
                 </div>
                 <button 
-                  onClick={() => setSpectrumSettings(p => ({...p, supplyChainEnabled: !p.supplyChainEnabled}))}
+                  onClick={() => setSpectrumSettings(p => ({...p, singularityEnabled: !p.singularityEnabled}))}
                   className="w-12 h-6 rounded-full transition-colors"
-                  style={{ background: spectrumSettings.supplyChainEnabled ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                  style={{ background: spectrumSettings.singularityEnabled ? '#10b981' : 'rgba(51,65,85,0.5)' }}
                 >
-                  <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: spectrumSettings.supplyChainEnabled ? 'translateX(26px)' : 'translateX(2px)' }} />
+                  <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: spectrumSettings.singularityEnabled ? 'translateX(26px)' : 'translateX(2px)' }} />
                 </button>
               </div>
+              
+              {/* Grok only singularity 70+ option */}
+              {spectrumSettings.grokEnabled && spectrumSettings.singularityEnabled && (
+                <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}>
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-violet-400" />
+                    <span className="text-sm text-slate-200">Grok only Singularity 70+</span>
+                  </div>
+                  <button 
+                    onClick={() => setSpectrumSettings(p => ({...p, grokOnlySingularity70: !p.grokOnlySingularity70}))}
+                    className="w-12 h-6 rounded-full transition-colors"
+                    style={{ background: spectrumSettings.grokOnlySingularity70 ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                  >
+                    <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: spectrumSettings.grokOnlySingularity70 ? 'translateX(26px)' : 'translateX(2px)' }} />
+                  </button>
+                </div>
+              )}
               
               <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
                 <div className="flex items-center gap-2">
@@ -2082,27 +2168,35 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
                   <div className="w-24 text-right">Price / MCap</div>
-                  <div className="w-24 text-center">Net Cash</div>
+                  <div className="w-20 text-center">Net Cash</div>
                   <div 
-                    className="w-28 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-24 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'insiderDate' ? 'compositeScore' : 'insiderDate')}
                   >
                     Insider Buy
                     {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
                   </div>
                   <div 
-                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'upsidePct' ? 'compositeScore' : 'upsidePct')}
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'singularityScore' ? 'compositeScore' : 'singularityScore')}
                   >
-                    Upside
-                    {sortBy === 'upsidePct' && <span className="text-emerald-400">↓</span>}
+                    Sing
+                    {sortBy === 'singularityScore' && <span className="text-amber-400">↓</span>}
                   </div>
                   <div 
-                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
-                    onClick={() => setSortBy(sortBy === 'insiderConviction' ? 'compositeScore' : 'insiderConviction')}
+                    className="w-16 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'optionsShortTerm' ? 'compositeScore' : 'optionsShortTerm')}
+                    title="Options Flow (Short/Long)"
                   >
-                    Convic
-                    {sortBy === 'insiderConviction' && <span className="text-emerald-400">↓</span>}
+                    Opts
+                    {sortBy === 'optionsShortTerm' && <span className="text-red-400">↓</span>}
+                  </div>
+                  <div 
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'upsidePct' ? 'compositeScore' : 'upsidePct')}
+                  >
+                    Up%
+                    {sortBy === 'upsidePct' && <span className="text-emerald-400">↓</span>}
                   </div>
                   <div 
                     className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
@@ -2111,9 +2205,9 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                     C&H
                     {sortBy === 'cupHandleScore' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-16 text-center">52wL</div>
+                  <div className="w-14 text-center">52wL</div>
                   <div 
-                    className="w-20 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-16 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy('compositeScore')}
                   >
                     Score
@@ -2136,13 +2230,60 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                             <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
                             {s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="AI Analysis" />}
+                            {s.singularityScore >= 70 && <Zap className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-24 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
-                        <div className="w-28 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
-                        <div className="w-14 text-center">
+                        <div className="w-20 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
+                        <div className="w-24 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        {/* Singularity Score */}
+                        <div className="w-12 text-center">
+                          {s.singularityScore !== null && s.singularityScore !== undefined ? (
+                            <span 
+                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              style={{ 
+                                background: s.singularityScore >= 70 ? 'rgba(245,158,11,0.2)' : s.singularityScore >= 40 ? 'rgba(100,116,139,0.2)' : 'rgba(51,65,85,0.2)',
+                                color: s.singularityScore >= 70 ? '#fbbf24' : s.singularityScore >= 40 ? '#94a3b8' : '#64748b'
+                              }}
+                            >
+                              {s.singularityScore}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        {/* Options Flow (Short/Long) */}
+                        <div className="w-16 text-center">
+                          {(s.optionsShortTerm !== null && s.optionsShortTerm !== undefined) || (s.optionsLongTerm !== null && s.optionsLongTerm !== undefined) ? (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span 
+                                className="text-[10px] font-bold mono px-1 rounded"
+                                style={{ 
+                                  background: s.optionsShortTerm >= 30 ? 'rgba(16,185,129,0.2)' : s.optionsShortTerm <= -30 ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.1)',
+                                  color: s.optionsShortTerm >= 30 ? '#34d399' : s.optionsShortTerm <= -30 ? '#f87171' : '#64748b'
+                                }}
+                                title="Short-term options signal"
+                              >
+                                S:{s.optionsShortTerm > 0 ? '+' : ''}{s.optionsShortTerm || 0}
+                              </span>
+                              <span 
+                                className="text-[10px] font-bold mono px-1 rounded"
+                                style={{ 
+                                  background: s.optionsLongTerm >= 30 ? 'rgba(16,185,129,0.2)' : s.optionsLongTerm <= -30 ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.1)',
+                                  color: s.optionsLongTerm >= 30 ? '#34d399' : s.optionsLongTerm <= -30 ? '#f87171' : '#64748b'
+                                }}
+                                title="Long-term options signal"
+                              >
+                                L:{s.optionsLongTerm > 0 ? '+' : ''}{s.optionsLongTerm || 0}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        {/* Upside % */}
+                        <div className="w-12 text-center">
                           {s.upsidePct !== null && s.upsidePct !== undefined ? (
                             <span 
                               className="text-xs font-bold mono px-1 py-0.5 rounded"
@@ -2157,21 +2298,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        <div className="w-14 text-center">
-                          {s.insiderConviction !== null && s.insiderConviction !== undefined ? (
-                            <span 
-                              className="text-xs font-bold mono px-1 py-0.5 rounded"
-                              style={{ 
-                                background: s.insiderConviction >= 70 ? 'rgba(16,185,129,0.2)' : s.insiderConviction >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
-                                color: s.insiderConviction >= 70 ? '#34d399' : s.insiderConviction >= 40 ? '#fbbf24' : '#f87171'
-                              }}
-                            >
-                              {s.insiderConviction}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-slate-600">—</span>
-                          )}
-                        </div>
+                        {/* Cup & Handle */}
                         <div className="w-12 text-center">
                           {s.cupHandleScore !== null && s.cupHandleScore !== undefined ? (
                             <span 
@@ -2187,10 +2314,10 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        <div className="w-16 text-center">
+                        <div className="w-14 text-center">
                           <div className="mono text-xs font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
                         </div>
-                        <div className="w-20"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
+                        <div className="w-16"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
                         <div className="w-6">{selected?.ticker === s.ticker ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                       </div>
                       
@@ -2257,7 +2384,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">SingularityHunter • Polygon.io + Finnhub + xAI Grok Oracle</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v2.0</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v2.1</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Stock Limit: {stockLimit === 0 ? 'All' : stockLimit}</span>

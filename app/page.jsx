@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar } from 'lucide-react';
+import { TrendingUp, Users, BarChart3, Target, ChevronDown, ChevronUp, Zap, RefreshCw, Clock, CheckCircle, Sliders, Play, Brain, Network, LineChart, Globe, Database, FileText, Radio, Radar, AlertCircle, X, RotateCcw, DollarSign, Activity, TrendingDown, Beaker, Sparkles, Banknote, Calendar, Cpu, Atom, Bot, Eye, Filter, Flame } from 'lucide-react';
 
 // ============================================
 // API CONFIGURATION
@@ -10,7 +10,7 @@ const POLYGON_KEY = process.env.NEXT_PUBLIC_POLYGON_KEY || '';
 const FINNHUB_KEY = process.env.NEXT_PUBLIC_FINNHUB_KEY || '';
 const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY || '';
 
-const SESSIONS_KEY = 'valuehunter_sessions';
+const SESSIONS_KEY = 'singularityhunter_sessions';
 const CACHE_DURATION = 24 * 60 * 60 * 1000;
 
 const MIN_MARKET_CAP = 40_000_000;
@@ -24,18 +24,45 @@ const STOCK_LIMITS = {
   0: 'All stocks'
 };
 
-// Simple category filters
+// Singularity Supply Chain Buckets
+const SINGULARITY_BUCKETS = {
+  compute: { 
+    name: 'COMPUTE', 
+    icon: Cpu, 
+    color: '#8B5CF6',
+    description: 'Semiconductors, photonics, liquid cooling, data center hardware'
+  },
+  energy: { 
+    name: 'ENERGY', 
+    icon: Atom, 
+    color: '#F59E0B',
+    description: 'Nuclear, fusion supply, transformers, copper, next-gen batteries'
+  },
+  robotics: { 
+    name: 'ROBOTICS', 
+    icon: Bot, 
+    color: '#10B981',
+    description: 'Actuators, sensors, rare earth magnets, humanoid components'
+  },
+  agi_interface: { 
+    name: 'AGI_INTERFACE', 
+    icon: Eye, 
+    color: '#EC4899',
+    description: 'BCI (Brain-Computer Interface), AR/VR hardware, haptics'
+  }
+};
+
+// Category filters (updated for Singularity)
 const STOCK_CATEGORIES = {
   all: { name: 'All Stocks', keywords: [] },
+  compute: { name: 'Compute (7+)', keywords: [], singularityBucket: true },
+  energy: { name: 'Energy (7+)', keywords: [], singularityBucket: true },
+  robotics: { name: 'Robotics (7+)', keywords: [], singularityBucket: true },
+  agi_interface: { name: 'AGI Interface (7+)', keywords: [], singularityBucket: true },
+  singularity_all: { name: 'Any Singularity (7+)', keywords: [], singularityBucket: true },
   tech: { name: 'Tech', keywords: ['software', 'computer', 'semiconductor', 'electronic', 'technology', 'data processing', 'internet', 'cloud', 'cyber', 'digital'] },
-  social: { name: 'Social Media', keywords: ['social', 'media', 'advertising', 'digital media', 'internet', 'platform', 'network', 'communication'] },
-  familiar: { name: 'Consumer/Familiar', keywords: ['retail', 'restaurant', 'food', 'beverage', 'apparel', 'consumer', 'entertainment', 'hotel', 'leisure', 'gaming'] },
   biotech: { name: 'Biotech/Health', keywords: ['biotech', 'pharmaceutical', 'medical', 'drug', 'health', 'therapeutic', 'diagnostic', 'surgical'] },
-  finance: { name: 'Finance', keywords: ['bank', 'financial', 'insurance', 'investment', 'loan', 'credit', 'capital'] },
-  energy: { name: 'Energy', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
-  solar: { name: 'Solar Supply Chain', keywords: [], aiTagged: true },
-  batteries: { name: 'Batteries Supply Chain', keywords: [], aiTagged: true },
-  robotics: { name: 'Robotics Supply Chain', keywords: [], aiTagged: true },
+  energy_traditional: { name: 'Energy (Traditional)', keywords: ['oil', 'gas', 'energy', 'solar', 'wind', 'petroleum', 'mining', 'utilities'] },
 };
 
 const discoveryAgents = [
@@ -44,6 +71,7 @@ const discoveryAgents = [
   { id: 'technicalScanner', name: 'Technical Scanner', icon: Activity, color: '#F59E0B', coverage: '52-week analysis' },
   { id: 'insiderScanner', name: 'Insider Scanner', icon: Users, color: '#10B981', coverage: 'SEC Form 4' },
   { id: 'financialScanner', name: 'Financial Scanner', icon: Banknote, color: '#EC4899', coverage: 'Cash & Debt' },
+  { id: 'optionsScanner', name: 'Options Heat', icon: Flame, color: '#EF4444', coverage: 'Unusual activity' },
 ];
 
 const analysisAgents = [
@@ -246,6 +274,115 @@ async function getInsiderTransactions(ticker) {
 }
 
 // ============================================
+// OPTIONS HEAT - Detect unusual options activity
+// ============================================
+async function getOptionsSentiment(ticker) {
+  try {
+    // Get options contracts from Polygon
+    const today = new Date();
+    const futureDate = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days out
+    const dateStr = futureDate.toISOString().split('T')[0];
+    
+    const res = await fetch(
+      `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${ticker}&expired=false&limit=100&apiKey=${POLYGON_KEY}`
+    );
+    
+    if (!res.ok) return { swingTradeScore: 0, putCallRatio: null, optionsVolume: 0, ivRank: null };
+    
+    const data = await res.json();
+    
+    if (!data.results || data.results.length === 0) {
+      return { swingTradeScore: 0, putCallRatio: null, optionsVolume: 0, ivRank: null, noOptions: true };
+    }
+    
+    // Count puts vs calls
+    let calls = 0, puts = 0;
+    let totalOI = 0;
+    
+    data.results.forEach(contract => {
+      if (contract.contract_type === 'call') {
+        calls++;
+        totalOI += contract.open_interest || 0;
+      } else if (contract.contract_type === 'put') {
+        puts++;
+        totalOI += contract.open_interest || 0;
+      }
+    });
+    
+    // Calculate put/call ratio (lower = more bullish)
+    const putCallRatio = calls > 0 ? (puts / calls) : null;
+    
+    // Try to get recent options volume/activity
+    let recentVolume = 0;
+    let avgVolume = 0;
+    let ivEstimate = null;
+    
+    // Get a sample of options snapshots for volume
+    try {
+      const snapshotRes = await fetch(
+        `https://api.polygon.io/v3/snapshot/options/${ticker}?limit=50&apiKey=${POLYGON_KEY}`
+      );
+      
+      if (snapshotRes.ok) {
+        const snapshotData = await snapshotRes.json();
+        if (snapshotData.results) {
+          snapshotData.results.forEach(opt => {
+            if (opt.day) {
+              recentVolume += opt.day.volume || 0;
+            }
+            if (opt.implied_volatility) {
+              ivEstimate = ivEstimate ? (ivEstimate + opt.implied_volatility) / 2 : opt.implied_volatility;
+            }
+          });
+        }
+      }
+    } catch (e) {
+      // Snapshot not available, continue
+    }
+    
+    // Calculate Swing Trade Score (0-100)
+    // Higher score = more bullish signals
+    let swingTradeScore = 50; // Start neutral
+    
+    // Put/Call ratio scoring (lower is bullish)
+    if (putCallRatio !== null) {
+      if (putCallRatio < 0.5) swingTradeScore += 25; // Very bullish
+      else if (putCallRatio < 0.7) swingTradeScore += 15;
+      else if (putCallRatio < 1.0) swingTradeScore += 5;
+      else if (putCallRatio > 1.5) swingTradeScore -= 15; // Bearish
+      else if (putCallRatio > 1.2) swingTradeScore -= 5;
+    }
+    
+    // Open interest scoring (more activity = more interest)
+    if (totalOI > 10000) swingTradeScore += 15;
+    else if (totalOI > 5000) swingTradeScore += 10;
+    else if (totalOI > 1000) swingTradeScore += 5;
+    else if (totalOI < 100) swingTradeScore -= 10; // Low liquidity
+    
+    // Recent volume scoring
+    if (recentVolume > 5000) swingTradeScore += 10;
+    else if (recentVolume > 1000) swingTradeScore += 5;
+    
+    // Clamp score
+    swingTradeScore = Math.max(0, Math.min(100, swingTradeScore));
+    
+    return {
+      swingTradeScore,
+      putCallRatio: putCallRatio ? putCallRatio.toFixed(2) : null,
+      optionsVolume: recentVolume,
+      openInterest: totalOI,
+      ivRank: ivEstimate ? Math.round(ivEstimate * 100) : null,
+      callCount: calls,
+      putCount: puts
+    };
+    
+  } catch (e) {
+    console.warn(`Options data failed for ${ticker}:`, e);
+    return { swingTradeScore: 0, putCallRatio: null, optionsVolume: 0, ivRank: null };
+  }
+}
+
+// ============================================
 // GROK AI ANALYSIS - Deep analysis focused on future potential
 // ============================================
 async function getAIAnalysis(stock) {
@@ -332,6 +469,132 @@ CUP_HANDLE_SCORE: [number from 0 to 100]`;
   } catch (e) {
     console.error('Grok AI analysis failed:', e);
     return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null, cupHandleScore: null };
+  }
+}
+
+// ============================================
+// ORACLE ANALYSIS - The Singularity Capitalist
+// ============================================
+async function getOracleAnalysis(stock) {
+  console.log(`Running Oracle analysis for ${stock.ticker}...`);
+  
+  try {
+    const singularityScores = stock.singularityScores || {};
+    const maxSingularityScore = Math.max(
+      singularityScores.compute || 0,
+      singularityScores.energy || 0,
+      singularityScores.robotics || 0,
+      singularityScores.agi_interface || 0
+    );
+    
+    const topBucket = Object.entries(singularityScores)
+      .sort((a, b) => b[1] - a[1])[0];
+    
+    const prompt = `You are "The Singularity Capitalist" - a hyper-aggressive investor who combines Warren Buffett's value discipline with Sam Altman's exponential growth thesis. You are NOT risk-averse. You accept 100% loss risk for 1000% gain potential. You hunt for hidden suppliers to the Singularity.
+
+ANALYZE THIS POTENTIAL SINGULARITY SUPPLIER:
+
+COMPANY: ${stock.ticker} - ${stock.name}
+SECTOR: ${stock.sector || 'Unknown'}
+
+FINANCIALS:
+- Price: $${stock.price?.toFixed(2)} | Market Cap: $${stock.marketCap}M
+- Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'} ${stock.netCash > 0 ? '(CASH RICH)' : stock.netCash < 0 ? '(IN DEBT)' : ''}
+- 52-Week Position: ${stock.fromLow?.toFixed(1)}% above low
+
+SINGULARITY SUPPLY CHAIN RELEVANCE:
+- COMPUTE Score: ${singularityScores.compute || 0}/10 (Semiconductors, photonics, cooling, data centers)
+- ENERGY Score: ${singularityScores.energy || 0}/10 (Nuclear, fusion, transformers, batteries)
+- ROBOTICS Score: ${singularityScores.robotics || 0}/10 (Actuators, sensors, rare earth, humanoids)
+- AGI_INTERFACE Score: ${singularityScores.agi_interface || 0}/10 (BCI, AR/VR, haptics)
+- TOP BUCKET: ${topBucket ? topBucket[0].toUpperCase() : 'None'} (${topBucket ? topBucket[1] : 0}/10)
+
+OPTIONS HEAT:
+- Swing Trade Score: ${stock.swingTradeScore || 0}/100
+- Put/Call Ratio: ${stock.putCallRatio || 'N/A'} ${stock.putCallRatio && stock.putCallRatio < 0.7 ? '(BULLISH FLOW)' : ''}
+- Open Interest: ${stock.openInterest?.toLocaleString() || 'N/A'}
+
+INSIDER ACTIVITY:
+- Insider Activity Score: ${stock.agentScores?.insiderActivity || 0}/100
+- Last Purchase: ${stock.lastInsiderPurchase?.date || 'None'} ${stock.lastInsiderPurchase?.amount ? '($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : ''}
+
+TECHNICAL:
+- Cup & Handle Score: ${stock.cupHandleScore || 'Not analyzed'}/100
+
+AS THE SINGULARITY CAPITALIST, ANALYZE:
+1. Why could this stock 10x as AGI/Robotics/Infinite Energy arrives?
+2. What's the hidden supply chain angle others are missing?
+3. Is the options flow confirming smart money accumulation?
+4. What's the risk of total loss vs potential for massive gain?
+
+Be aggressive. Be bold. Find the 10x thesis or reject this stock entirely.
+
+END YOUR RESPONSE WITH EXACTLY THESE FOUR LINES:
+PREDICTION: [BULLISH / BEARISH / NEUTRAL]
+CONVICTION_SCORE: [0-100]
+TARGET_TIMEFRAME: [Short-term Swing / Long-term Hold]
+THE_10X_THESIS: [One sentence on why this specific stock could 10x]`;
+
+    const response = await fetch("/api/grok", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      return { 
+        oracleAnalysis: `API Error: ${errorData.error || response.status}`,
+        prediction: null,
+        oracleConviction: null,
+        targetTimeframe: null,
+        tenXThesis: null
+      };
+    }
+
+    const data = await response.json();
+    let text = data.analysis || '';
+    
+    // Extract Oracle outputs
+    let prediction = null;
+    const predictionMatch = text.match(/PREDICTION[:\s]*(BULLISH|BEARISH|NEUTRAL)/i);
+    if (predictionMatch) prediction = predictionMatch[1].toUpperCase();
+    
+    let oracleConviction = null;
+    const convictionMatch = text.match(/CONVICTION_SCORE[:\s]*(\d+)/i);
+    if (convictionMatch) oracleConviction = parseInt(convictionMatch[1]);
+    
+    let targetTimeframe = null;
+    const timeframeMatch = text.match(/TARGET_TIMEFRAME[:\s]*(Short-term Swing|Long-term Hold)/i);
+    if (timeframeMatch) targetTimeframe = timeframeMatch[1];
+    
+    let tenXThesis = null;
+    const thesisMatch = text.match(/THE_10X_THESIS[:\s]*(.+?)(?:\n|$)/i);
+    if (thesisMatch) tenXThesis = thesisMatch[1].trim();
+    
+    // Clean the analysis text
+    text = text.replace(/PREDICTION[:\s]*(BULLISH|BEARISH|NEUTRAL)/gi, '').trim();
+    text = text.replace(/CONVICTION_SCORE[:\s]*\d+/gi, '').trim();
+    text = text.replace(/TARGET_TIMEFRAME[:\s]*(Short-term Swing|Long-term Hold)/gi, '').trim();
+    text = text.replace(/THE_10X_THESIS[:\s]*.+/gi, '').trim();
+    
+    return {
+      oracleAnalysis: text,
+      prediction,
+      oracleConviction,
+      targetTimeframe,
+      tenXThesis
+    };
+    
+  } catch (e) {
+    console.error('Oracle analysis failed:', e);
+    return { 
+      oracleAnalysis: `Error: ${e.message}`,
+      prediction: null,
+      oracleConviction: null,
+      targetTimeframe: null,
+      tenXThesis: null
+    };
   }
 }
 
@@ -432,7 +695,7 @@ function saveSession(sessionId, stocks, scanStats, name = null) {
       stockCount: stocks.length
     };
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-    localStorage.setItem('valuehunter_current_session', sessionId);
+    localStorage.setItem('singularityhunter_current_session', sessionId);
   } catch (e) { console.warn('Session save failed:', e); }
 }
 
@@ -445,7 +708,7 @@ function loadSession(sessionId) {
 
 function loadCurrentSession() {
   try {
-    const currentId = localStorage.getItem('valuehunter_current_session');
+    const currentId = localStorage.getItem('singularityhunter_current_session');
     if (!currentId) return null;
     return loadSession(currentId);
   } catch (e) { return null; }
@@ -497,15 +760,17 @@ function formatMoney(amount) {
 export default function StockResearchApp() {
   const [stocks, setStocks] = useState([]);
   const [weights, setWeights] = useState({
-    pricePosition: 40,
-    insiderActivity: 40,
+    pricePosition: 30,
+    insiderActivity: 30,
     netCash: 20,
+    optionsHeat: 20,
   });
   const [selected, setSelected] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
+  const [isRunningOracle, setIsRunningOracle] = useState(false);
   const [showWeights, setShowWeights] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
@@ -516,6 +781,7 @@ export default function StockResearchApp() {
   const [sectorFilter, setSectorFilter] = useState('all');
   const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
+  const [oracleProgress, setOracleProgress] = useState({ current: 0, total: 0 });
   
   // Session management
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -524,25 +790,40 @@ export default function StockResearchApp() {
   // Scan settings
   const [stockLimit, setStockLimit] = useState(100);
   
-  // Full spectrum scan settings
+  // Full spectrum scan settings with Circuit Breakers
   const [spectrumSettings, setSpectrumSettings] = useState({
     baseStockLimit: 500,
     supplyChainEnabled: true,
     grokEnabled: true,
-    grokCount: 25
+    grokCount: 25,
+    oracleEnabled: true,
+    oracleCount: 10,
+    // Circuit Breakers (Gatekeepers)
+    skipHighDebt: true,
+    skipLowInsider: false,
+    skipLowSingularity: true,
+    minSingularityScore: 7
   });
 
-  // Filter by category keywords or AI tags
+  // Filter by category keywords or Singularity buckets
   const matchesCategory = (stock, categoryKey) => {
     if (categoryKey === 'all') return true;
     const category = STOCK_CATEGORIES[categoryKey];
     if (!category) return true;
     
-    // AI-tagged categories (supply chain)
-    if (category.aiTagged) {
-      if (categoryKey === 'solar') return stock.supplyChain?.solar === true;
-      if (categoryKey === 'batteries') return stock.supplyChain?.batteries === true;
-      if (categoryKey === 'robotics') return stock.supplyChain?.robotics === true;
+    // Singularity bucket categories (score >= 7)
+    if (category.singularityBucket) {
+      const scores = stock.singularityScores || {};
+      if (categoryKey === 'compute') return (scores.compute || 0) >= 7;
+      if (categoryKey === 'energy') return (scores.energy || 0) >= 7;
+      if (categoryKey === 'robotics') return (scores.robotics || 0) >= 7;
+      if (categoryKey === 'agi_interface') return (scores.agi_interface || 0) >= 7;
+      if (categoryKey === 'singularity_all') {
+        return (scores.compute || 0) >= 7 || 
+               (scores.energy || 0) >= 7 || 
+               (scores.robotics || 0) >= 7 || 
+               (scores.agi_interface || 0) >= 7;
+      }
       return false;
     }
     
@@ -551,6 +832,7 @@ export default function StockResearchApp() {
     const nameLower = (stock.name || '').toLowerCase();
     return category.keywords.some(kw => sectorLower.includes(kw) || nameLower.includes(kw));
   };
+  
   const [lastUpdate, setLastUpdate] = useState(null);
   const [status, setStatus] = useState({ type: 'ready', msg: 'Loading...' });
   const [error, setError] = useState(null);
@@ -559,9 +841,11 @@ export default function StockResearchApp() {
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
   const [aiAnalyzeCount, setAiAnalyzeCount] = useState(10);
   const [aiWeights, setAiWeights] = useState({
-    conviction: 20,
-    upside: 20,
-    cupHandle: 20
+    conviction: 15,
+    upside: 15,
+    cupHandle: 10,
+    singularity: 30,
+    oracle: 30
   });
   const [fullSpectrumPhase, setFullSpectrumPhase] = useState('');
 
@@ -570,7 +854,7 @@ export default function StockResearchApp() {
     
     // Calculate total weight (base + AI)
     const baseTotal = Object.values(w).reduce((a, b) => a + b, 0);
-    const aiTotal = aw.conviction + aw.upside + aw.cupHandle;
+    const aiTotal = (aw.conviction || 0) + (aw.upside || 0) + (aw.cupHandle || 0) + (aw.singularity || 0) + (aw.oracle || 0);
     const grandTotal = baseTotal + aiTotal;
     
     // If all weights are 0, just return unsorted
@@ -581,12 +865,17 @@ export default function StockResearchApp() {
     return list.map(s => {
       let score = 0;
       
-      // Base scores (pricePosition, insiderActivity, netCash)
+      // Base scores (pricePosition, insiderActivity, netCash, optionsHeat)
       if (baseTotal > 0) {
         Object.keys(w).forEach(id => { 
-          if (s.agentScores?.[id] !== undefined && w[id] > 0) {
-            // Each component contributes proportionally to its weight
-            score += (s.agentScores[id] / 100) * (w[id] / grandTotal) * 100;
+          if (w[id] > 0) {
+            let value = 0;
+            if (id === 'optionsHeat') {
+              value = s.swingTradeScore || 0;
+            } else if (s.agentScores?.[id] !== undefined) {
+              value = s.agentScores[id];
+            }
+            score += (value / 100) * (w[id] / grandTotal) * 100;
           }
         });
       }
@@ -598,13 +887,34 @@ export default function StockResearchApp() {
       
       // AI scores - Upside (normalize: 100%+ upside = max score)
       if (aw.upside > 0 && s.upsidePct !== null && s.upsidePct !== undefined) {
-        const upsideNormalized = Math.max(0, Math.min(s.upsidePct / 100, 1)); // 0-100% maps to 0-1
+        const upsideNormalized = Math.max(0, Math.min(s.upsidePct / 100, 1));
         score += upsideNormalized * (aw.upside / grandTotal) * 100;
       }
       
-      // AI scores - Cup & Handle (0-100 scale now)
+      // AI scores - Cup & Handle (0-100 scale)
       if (aw.cupHandle > 0 && s.cupHandleScore !== null && s.cupHandleScore !== undefined) {
         score += (s.cupHandleScore / 100) * (aw.cupHandle / grandTotal) * 100;
+      }
+      
+      // AI scores - Singularity (max of the 4 buckets, 0-10 scaled to 0-100)
+      if (aw.singularity > 0 && s.singularityScores) {
+        const maxSingularity = Math.max(
+          s.singularityScores.compute || 0,
+          s.singularityScores.energy || 0,
+          s.singularityScores.robotics || 0,
+          s.singularityScores.agi_interface || 0
+        );
+        score += (maxSingularity / 10) * (aw.singularity / grandTotal) * 100;
+      }
+      
+      // AI scores - Oracle Conviction (0-100 scale)
+      if (aw.oracle > 0 && s.oracleConviction !== null && s.oracleConviction !== undefined) {
+        // Boost for BULLISH prediction
+        let oracleMultiplier = 1;
+        if (s.prediction === 'BULLISH') oracleMultiplier = 1.2;
+        else if (s.prediction === 'BEARISH') oracleMultiplier = 0.5;
+        
+        score += (s.oracleConviction / 100) * oracleMultiplier * (aw.oracle / grandTotal) * 100;
       }
       
       return { ...s, compositeScore: Math.min(100, Math.max(0, score)) };
@@ -696,14 +1006,14 @@ export default function StockResearchApp() {
     setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
   };
 
-  // Batch scan for supply chain categorization (20 stocks at a time)
+  // Batch scan for SINGULARITY SUPPLY CHAIN categorization (20 stocks at a time)
   const runSupplyChainScan = async () => {
     if (isScanningSupplyChain || stocks.length === 0) return;
     
     setIsScanningSupplyChain(true);
     setError(null);
     
-    const batchSize = 20;
+    const batchSize = 15; // Smaller batches for more accurate scoring
     const totalBatches = Math.ceil(stocks.length / batchSize);
     setSupplyChainProgress({ current: 0, total: stocks.length });
     
@@ -714,21 +1024,35 @@ export default function StockResearchApp() {
       const batchStocks = stocks.slice(startIdx, startIdx + batchSize);
       
       setSupplyChainProgress({ current: startIdx, total: stocks.length });
-      setStatus({ type: 'loading', msg: `Categorizing supply chains... ${startIdx}/${stocks.length}` });
+      setStatus({ type: 'loading', msg: `Scanning Singularity supply chains... ${startIdx}/${stocks.length}` });
       
-      // Build batch prompt
-      const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown sector'})`).join('\n');
+      // Build batch prompt for Singularity buckets
+      const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
       
-      const prompt = `Categorize these ${batchStocks.length} stocks into supply chains. For EACH stock, determine if it belongs to:
-- SOLAR: Solar energy, solar panels, inverters, solar installation, photovoltaic, solar materials
-- BATTERIES: Batteries, lithium, energy storage, EV batteries, battery materials, battery tech
-- ROBOTICS: Robotics, automation, AI hardware, industrial robots, drones, autonomous systems
+      const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, Robotics, and Infinite Energy.
 
-Stocks:
+Score each stock from 0-10 on how CRITICAL they are to each supply chain bucket:
+
+COMPUTE (0-10): Semiconductors, photonics, liquid cooling, quantum computing, data center hardware, AI chips, GPU suppliers, chip packaging, advanced materials for chips.
+
+ENERGY (0-10): Nuclear (fission/fusion), uranium suppliers, transformers, electrical grid, copper/rare materials, next-gen batteries (solid state, sodium), power conversion, superconductors.
+
+ROBOTICS (0-10): Actuators, motors, sensors, lidar, rare earth magnets, precision bearings, humanoid robot components, industrial automation, drones, autonomous systems.
+
+AGI_INTERFACE (0-10): Brain-Computer Interface (BCI), neural implants, AR/VR hardware, haptic feedback, spatial computing, eye tracking, biometric sensors, neural sensors.
+
+SCORING GUIDE:
+0 = No relevance
+1-3 = Tangential/weak connection
+4-6 = Moderate supplier or indirect exposure
+7-8 = Important supplier, direct exposure
+9-10 = Critical/irreplaceable supplier, pure play
+
+STOCKS TO ANALYZE:
 ${stockList}
 
-Respond with ONLY a JSON array, no other text. Each object must have ticker and boolean fields:
-[{"ticker":"ABC","solar":false,"batteries":true,"robotics":false},{"ticker":"XYZ","solar":true,"batteries":false,"robotics":false}]`;
+Respond with ONLY a JSON array. Each object must have ticker and numeric scores (0-10):
+[{"ticker":"ABC","compute":8,"energy":2,"robotics":6,"agi_interface":0}]`;
 
       try {
         const response = await fetch("/api/grok", {
@@ -739,27 +1063,26 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         
         if (response.ok) {
           const data = await response.json();
-          // Try to parse JSON from response
-          let categories = [];
+          let scores = [];
           try {
-            // Find JSON array in response
             const jsonMatch = data.analysis.match(/\[[\s\S]*\]/);
             if (jsonMatch) {
-              categories = JSON.parse(jsonMatch[0]);
+              scores = JSON.parse(jsonMatch[0]);
             }
           } catch (e) {
-            console.warn('Failed to parse supply chain response:', e);
+            console.warn('Failed to parse Singularity response:', e);
           }
           
-          // Update stocks with supply chain tags
-          categories.forEach(cat => {
+          // Update stocks with Singularity scores
+          scores.forEach(item => {
             updatedStocks = updatedStocks.map(s => 
-              s.ticker === cat.ticker ? {
+              s.ticker === item.ticker ? {
                 ...s,
-                supplyChain: {
-                  solar: cat.solar || false,
-                  batteries: cat.batteries || false,
-                  robotics: cat.robotics || false
+                singularityScores: {
+                  compute: Math.min(10, Math.max(0, item.compute || 0)),
+                  energy: Math.min(10, Math.max(0, item.energy || 0)),
+                  robotics: Math.min(10, Math.max(0, item.robotics || 0)),
+                  agi_interface: Math.min(10, Math.max(0, item.agi_interface || 0))
                 }
               } : s
             );
@@ -768,24 +1091,78 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
           setStocks(updatedStocks);
         }
       } catch (e) {
-        console.error('Supply chain batch failed:', e);
+        console.error('Singularity scan batch failed:', e);
       }
       
-      // Small delay between batches
       if (batch < totalBatches - 1) {
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
     
+    // Recalculate scores
+    const reScored = calcScores(updatedStocks, weights, aiWeights);
+    setStocks(reScored);
+    
     // Save updated stocks to current session
-    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
+    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
     if (currentSessionId) {
-      saveSession(currentSessionId, updatedStocks, scanStats);
+      saveSession(currentSessionId, reScored, scanStats);
+      setSessions(getAllSessions());
     }
     
     setIsScanningSupplyChain(false);
     setSupplyChainProgress({ current: 0, total: 0 });
-    setStatus({ type: 'live', msg: `${stocks.length} stocks • Supply chain scan complete` });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Singularity scan complete` });
+  };
+
+  // Run Oracle Analysis on filtered stocks
+  const runOracleAnalysis = async (stockList) => {
+    if (isRunningOracle || !stockList || stockList.length === 0) return;
+    
+    setIsRunningOracle(true);
+    setError(null);
+    
+    setOracleProgress({ current: 0, total: stockList.length });
+    
+    let updatedStocks = [...stocks];
+    
+    for (let i = 0; i < stockList.length; i++) {
+      setOracleProgress({ current: i + 1, total: stockList.length });
+      setStatus({ type: 'loading', msg: `Oracle analyzing ${stockList[i].ticker} (${i + 1}/${stockList.length})...` });
+      
+      const result = await getOracleAnalysis(stockList[i]);
+      
+      updatedStocks = updatedStocks.map(s => 
+        s.ticker === stockList[i].ticker ? { 
+          ...s, 
+          oracleAnalysis: result.oracleAnalysis,
+          prediction: result.prediction,
+          oracleConviction: result.oracleConviction,
+          targetTimeframe: result.targetTimeframe,
+          tenXThesis: result.tenXThesis
+        } : s
+      );
+      setStocks(updatedStocks);
+      
+      if (i < stockList.length - 1) {
+        await new Promise(r => setTimeout(r, 2500));
+      }
+    }
+    
+    // Recalculate scores
+    const reScored = calcScores(updatedStocks, weights, aiWeights);
+    setStocks(reScored);
+    
+    // Save to session
+    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
+    if (currentSessionId) {
+      saveSession(currentSessionId, reScored, scanStats);
+      setSessions(getAllSessions());
+    }
+    
+    setIsRunningOracle(false);
+    setOracleProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stockList.length} stocks • Oracle analysis complete` });
   };
 
   const runBaseScan = async () => {
@@ -836,7 +1213,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         await new Promise(r => setTimeout(r, 220));
       }
 
-      setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running', insiderScanner: 'running', financialScanner: 'running' }));
+      setDiscoveryStatus(p => ({ ...p, marketCapFilter: 'complete', technicalScanner: 'running', insiderScanner: 'running', financialScanner: 'running', optionsScanner: 'running' }));
       
       setScanProgress({ phase: 'Fetching detailed data...', current: 0, total: qualifiedTickers.length, found: qualifiedTickers.length });
       
@@ -845,15 +1222,23 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       for (let i = 0; i < qualifiedTickers.length; i++) {
         const { ticker, details } = qualifiedTickers[i];
         
-        const [prevDay, historicalData, financials, insiderData] = await Promise.all([
+        const [prevDay, historicalData, financials, insiderData, optionsData] = await Promise.all([
           getPrevDay(ticker),
           get52WeekData(ticker),
           getFinancials(ticker),
           getInsiderTransactions(ticker),
+          getOptionsSentiment(ticker),
         ]);
         
         if (prevDay && historicalData.length > 20) {
           const processed = processStock(ticker, details, prevDay, historicalData, financials, insiderData, processedStocks.length);
+          // Add options data
+          processed.swingTradeScore = optionsData?.swingTradeScore || 0;
+          processed.putCallRatio = optionsData?.putCallRatio;
+          processed.optionsVolume = optionsData?.optionsVolume || 0;
+          processed.openInterest = optionsData?.openInterest || 0;
+          processed.ivRank = optionsData?.ivRank;
+          
           processedStocks.push(processed);
           
           if (processedStocks.length % 5 === 0) {
@@ -1159,7 +1544,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       setStatus({ type: 'cached', msg: `${session.stocks.length} stocks (${session.name})` });
       setScanProgress(session.scanStats || { phase: 'complete', current: 0, total: 0, found: session.stocks.length });
       setShowSessions(false);
-      localStorage.setItem('valuehunter_current_session', sessionId);
+      localStorage.setItem('singularityhunter_current_session', sessionId);
     }
   };
 
@@ -1195,11 +1580,30 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         const chB = b.cupHandleScore ?? -1;
         return chB - chA;
       }
+      if (sortBy === 'singularity') {
+        const getMaxSingularity = (s) => {
+          const scores = s.singularityScores || {};
+          return Math.max(scores.compute || 0, scores.energy || 0, scores.robotics || 0, scores.agi_interface || 0);
+        };
+        return getMaxSingularity(b) - getMaxSingularity(a);
+      }
+      if (sortBy === 'swingTradeScore') {
+        return (b.swingTradeScore ?? -1) - (a.swingTradeScore ?? -1);
+      }
+      if (sortBy === 'oracleConviction') {
+        return (b.oracleConviction ?? -1) - (a.oracleConviction ?? -1);
+      }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
-  // Not needed anymore - using predefined categories
-  // const sectors = [...new Set(stocks.map(s => s.sector))].filter(Boolean).sort();
+  // Helper to get max singularity score
+  const getMaxSingularity = (stock) => {
+    const scores = stock.singularityScores || {};
+    return Math.max(scores.compute || 0, scores.energy || 0, scores.robotics || 0, scores.agi_interface || 0);
+  };
+
+  const stocksWithSingularity = stocks.filter(s => getMaxSingularity(s) >= 7).length;
+  const stocksWithOracle = stocks.filter(s => s.prediction).length;
 
   const StatusIcon = ({ s }) => {
     if (s === 'running') return <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />;
@@ -1243,10 +1647,10 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
       <header className="border-b border-slate-800/50 sticky top-0 z-50" style={{ background: 'rgba(10,14,23,0.95)', backdropFilter: 'blur(12px)' }}>
         <div className="max-w-[1800px] mx-auto px-6 py-4 flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}><Network className="w-6 h-6 text-white" /></div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #f59e0b, #ef4444)' }}><Atom className="w-6 h-6 text-white" /></div>
             <div>
-              <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #818cf8, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ValueHunter</span><span className="text-slate-400 font-normal ml-2 text-lg">AI</span></h1>
-              <p className="text-xs text-slate-500">Small-Cap Scanner • $40M-$400M</p>
+              <h1 className="text-2xl font-bold"><span style={{ background: 'linear-gradient(90deg, #f59e0b, #ef4444)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>SingularityHunter</span></h1>
+              <p className="text-xs text-slate-500">Hidden Suppliers to AGI • Robotics • Infinite Energy</p>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -1255,7 +1659,7 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
               borderColor: status.type === 'live' ? 'rgba(16,185,129,0.3)' : 'rgba(99,102,241,0.3)', 
               color: status.type === 'live' ? '#34d399' : '#a5b4fc' 
             }}>
-              {(status.type === 'loading' || isAnalyzingAI || isRunningFullSpectrum) ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+              {(status.type === 'loading' || isAnalyzingAI || isRunningFullSpectrum || isRunningOracle) ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
               <span>{fullSpectrumPhase || status.msg}</span>
               {cacheAge && status.type === 'cached' && <span className="text-slate-500">• {formatCacheAge(cacheAge)}</span>}
             </div>
@@ -1852,8 +2256,8 @@ Respond with ONLY a JSON array, no other text. Each object must have ticker and 
         
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <p className="text-xs text-slate-600">ValueHunter AI • Polygon.io + Finnhub + xAI Grok</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v1.9</span>
+            <p className="text-xs text-slate-600">SingularityHunter • Polygon.io + Finnhub + xAI Grok Oracle</p>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v2.0</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Stock Limit: {stockLimit === 0 ? 'All' : stockLimit}</span>

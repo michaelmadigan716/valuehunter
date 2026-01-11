@@ -107,58 +107,53 @@ async function getPrevDay(ticker) {
 // Get pre-market and after-hours data from Polygon snapshot
 async function getExtendedHours(ticker) {
   try {
-    // Polygon snapshot endpoint - requires paid plan for extended hours
-    const res = await fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_KEY}`);
+    // Use Yahoo Finance API for extended hours - it persists the data
+    const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=true`);
     
     if (!res.ok) {
-      const errorText = await res.text();
-      console.warn(`Extended hours API error for ${ticker}: ${res.status} - ${errorText}`);
+      console.warn(`Yahoo extended hours error for ${ticker}: ${res.status}`);
       return null;
     }
     
     const data = await res.json();
-    console.log(`Polygon snapshot for ${ticker}:`, JSON.stringify(data, null, 2));
+    const result = data.chart?.result?.[0];
     
-    const snapshot = data.ticker;
-    
-    if (!snapshot) {
-      console.warn(`No snapshot data for ${ticker}`);
+    if (!result) {
+      console.warn(`No Yahoo data for ${ticker}`);
       return null;
     }
     
-    const prevClose = snapshot.prevDay?.c || snapshot.day?.c;
-    const todayClose = snapshot.day?.c;
+    const meta = result.meta;
+    const regularMarketPrice = meta.regularMarketPrice;
+    const previousClose = meta.previousClose || meta.chartPreviousClose;
     
-    // Pre-market data (Polygon uses 'preMarket' object)
-    const preMarket = snapshot.preMarket;
-    // After-hours data (Polygon uses 'afterHours' object)
-    const afterHours = snapshot.afterHours;
+    // Pre-market price
+    const preMarketPrice = meta.preMarketPrice;
+    // Post-market (after hours) price
+    const postMarketPrice = meta.postMarketPrice;
     
     let preMarketChange = null;
     let afterHoursChange = null;
     
     // Pre-market: compare to previous close
-    if (preMarket && preMarket.price && prevClose) {
-      preMarketChange = ((preMarket.price - prevClose) / prevClose) * 100;
-      console.log(`${ticker} Pre-market: $${preMarket.price} vs prev close $${prevClose} = ${preMarketChange.toFixed(2)}%`);
+    if (preMarketPrice && previousClose) {
+      preMarketChange = ((preMarketPrice - previousClose) / previousClose) * 100;
+      console.log(`${ticker} Pre-market: $${preMarketPrice} (${preMarketChange.toFixed(2)}% from prev close)`);
     }
     
-    // After-hours: compare to today's close
-    if (afterHours && afterHours.price && todayClose) {
-      afterHoursChange = ((afterHours.price - todayClose) / todayClose) * 100;
-      console.log(`${ticker} After-hours: $${afterHours.price} vs today close $${todayClose} = ${afterHoursChange.toFixed(2)}%`);
-    }
-    
-    // If no extended hours data found, log what we did get
-    if (!preMarketChange && !afterHoursChange) {
-      console.log(`${ticker} - No extended hours data. prevClose: ${prevClose}, todayClose: ${todayClose}, preMarket: ${JSON.stringify(preMarket)}, afterHours: ${JSON.stringify(afterHours)}`);
+    // After-hours: compare to regular market close
+    if (postMarketPrice && regularMarketPrice) {
+      afterHoursChange = ((postMarketPrice - regularMarketPrice) / regularMarketPrice) * 100;
+      console.log(`${ticker} After-hours: $${postMarketPrice} (${afterHoursChange.toFixed(2)}% from close)`);
     }
     
     return {
-      preMarketPrice: preMarket?.price || null,
+      preMarketPrice: preMarketPrice || null,
       preMarketChange: preMarketChange,
-      afterHoursPrice: afterHours?.price || null,
+      afterHoursPrice: postMarketPrice || null,
       afterHoursChange: afterHoursChange,
+      regularMarketPrice,
+      previousClose,
       lastUpdate: new Date().toISOString()
     };
   } catch (e) { 

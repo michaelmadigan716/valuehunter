@@ -107,30 +107,25 @@ async function getPrevDay(ticker) {
 // Get pre-market and after-hours data from Polygon snapshot
 async function getExtendedHours(ticker) {
   try {
-    // Use Yahoo Finance API for extended hours - it persists the data
-    const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=true`);
+    // Use our proxy API to avoid CORS issues with Yahoo Finance
+    const res = await fetch(`/api/yahoo?ticker=${ticker}`);
     
     if (!res.ok) {
-      console.warn(`Yahoo extended hours error for ${ticker}: ${res.status}`);
+      console.warn(`Yahoo proxy error for ${ticker}: ${res.status}`);
       return null;
     }
     
     const data = await res.json();
-    const result = data.chart?.result?.[0];
     
-    if (!result) {
-      console.warn(`No Yahoo data for ${ticker}`);
+    if (data.error) {
+      console.warn(`Yahoo error for ${ticker}: ${data.error}`);
       return null;
     }
     
-    const meta = result.meta;
-    const regularMarketPrice = meta.regularMarketPrice;
-    const previousClose = meta.previousClose || meta.chartPreviousClose;
-    
-    // Pre-market price
-    const preMarketPrice = meta.preMarketPrice;
-    // Post-market (after hours) price
-    const postMarketPrice = meta.postMarketPrice;
+    const regularMarketPrice = data.regularMarketPrice;
+    const previousClose = data.previousClose;
+    const preMarketPrice = data.preMarketPrice;
+    const postMarketPrice = data.postMarketPrice;
     
     let preMarketChange = null;
     let afterHoursChange = null;
@@ -138,13 +133,13 @@ async function getExtendedHours(ticker) {
     // Pre-market: compare to previous close
     if (preMarketPrice && previousClose) {
       preMarketChange = ((preMarketPrice - previousClose) / previousClose) * 100;
-      console.log(`${ticker} Pre-market: $${preMarketPrice} (${preMarketChange.toFixed(2)}% from prev close)`);
+      console.log(`${ticker} Pre-market: $${preMarketPrice.toFixed(2)} (${preMarketChange.toFixed(2)}%)`);
     }
     
     // After-hours: compare to regular market close
     if (postMarketPrice && regularMarketPrice) {
       afterHoursChange = ((postMarketPrice - regularMarketPrice) / regularMarketPrice) * 100;
-      console.log(`${ticker} After-hours: $${postMarketPrice} (${afterHoursChange.toFixed(2)}% from close)`);
+      console.log(`${ticker} After-hours: $${postMarketPrice.toFixed(2)} (${afterHoursChange.toFixed(2)}%)`);
     }
     
     return {
@@ -154,6 +149,7 @@ async function getExtendedHours(ticker) {
       afterHoursChange: afterHoursChange,
       regularMarketPrice,
       previousClose,
+      marketState: data.marketState,
       lastUpdate: new Date().toISOString()
     };
   } catch (e) { 

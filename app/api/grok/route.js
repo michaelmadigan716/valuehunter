@@ -1,104 +1,50 @@
-// app/api/grok/route.js
-// Proxies requests to xAI Grok API
+// app/api/yahoo/route.js
+// Proxies requests to Yahoo Finance API to avoid CORS issues
 
-export async function POST(request) {
+export async function GET(request) {
   try {
-    const { prompt } = await request.json();
+    const { searchParams } = new URL(request.url);
+    const ticker = searchParams.get('ticker');
     
-    const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY;
-    
-    if (!GROK_KEY) {
-      return Response.json({ error: 'Grok API key not configured' }, { status: 500 });
+    if (!ticker) {
+      return Response.json({ error: 'Ticker required' }, { status: 400 });
     }
 
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROK_KEY}`
-      },
-      body: JSON.stringify({
-        model: "grok-4-fast-reasoning",
-        messages: [
-          { 
-            role: "system",
-            content: "You are an elite hedge fund analyst specializing in technical chart patterns and small-cap value investing. Always end your analysis with exactly THREE lines in this exact format:\nUPSIDE_PCT: [number]\nINSIDER_CONVICTION: [number]\nCUP_HANDLE_SCORE: [number]\nThese three data lines are required."
-          },
-          { 
-            role: "user", 
-            content: prompt 
-          }
-        ],
-        max_tokens: 1200,
-        temperature: 0.3
-      })
-    });
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=true`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      }
+    );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Grok API error:', response.status, errorText);
-      return Response.json({ error: `Grok API error: ${response.status} ${errorText}` }, { status: response.status });
+      return Response.json({ error: `Yahoo API error: ${response.status}` }, { status: response.status });
     }
 
     const data = await response.json();
-    let text = data.choices?.[0]?.message?.content || '';
+    const result = data.chart?.result?.[0];
     
-    console.log('Raw Grok response (last 400 chars):', text.slice(-400));
-    
-    // Clean up markdown
-    text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
-    
-    // Extract upside percentage
-    let upsidePct = null;
-    const upsideMatch = text.match(/UPSIDE_PCT[:\s=]*([+-]?\d+)/i);
-    if (upsideMatch) {
-      upsidePct = parseInt(upsideMatch[1]);
-      console.log('Found upside:', upsidePct);
+    if (!result) {
+      return Response.json({ error: 'No data found' }, { status: 404 });
     }
+
+    const meta = result.meta;
     
-    // Extract insider conviction
-    let insiderConviction = null;
-    const convictionMatch = text.match(/INSIDER_CONVICTION[:\s=]*(\d+)/i);
-    if (convictionMatch) {
-      insiderConviction = parseInt(convictionMatch[1]);
-      if (insiderConviction > 100) insiderConviction = 100;
-      console.log('Found conviction:', insiderConviction);
-    }
-    
-    // Extract cup and handle SCORE (0-100)
-    let cupHandleScore = null;
-    const cupHandlePatterns = [
-      /CUP_HANDLE_SCORE[:\s=]*(\d+)/i,
-      /CUP_HANDLE[:\s=]*(\d+)/i,
-      /CUPHANDLE[:\s=]*(\d+)/i
-    ];
-    for (const pattern of cupHandlePatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        cupHandleScore = parseInt(match[1]);
-        if (cupHandleScore > 100) cupHandleScore = 100;
-        console.log('Found cup handle score:', cupHandleScore);
-        break;
-      }
-    }
-    
-    // Remove the data lines from analysis text
-    text = text.replace(/UPSIDE_PCT[:\s=]*[+-]?\d+%?/gi, '').trim();
-    text = text.replace(/INSIDER_CONVICTION[:\s=]*\d+%?/gi, '').trim();
-    text = text.replace(/CUP_HANDLE_SCORE[:\s=]*\d+%?/gi, '').trim();
-    text = text.replace(/CUP_HANDLE[:\s=]*\d+%?/gi, '').trim();
-    
-    console.log('Extracted - upside:', upsidePct, 'conviction:', insiderConviction, 'cupHandleScore:', cupHandleScore);
-    
-    return Response.json({ 
-      analysis: text || 'No response from AI',
-      upsidePct: upsidePct,
-      insiderConviction: insiderConviction,
-      cupHandleScore: cupHandleScore
+    return Response.json({
+      ticker: meta.symbol,
+      regularMarketPrice: meta.regularMarketPrice,
+      previousClose: meta.previousClose || meta.chartPreviousClose,
+      preMarketPrice: meta.preMarketPrice || null,
+      preMarketChange: meta.preMarketChangePercent || null,
+      postMarketPrice: meta.postMarketPrice || null,
+      postMarketChange: meta.postMarketChangePercent || null,
+      marketState: meta.marketState // PRE, REGULAR, POST, CLOSED
     });
     
   } catch (error) {
-    console.error('Grok route error:', error);
+    console.error('Yahoo route error:', error);
     return Response.json({ error: error.message }, { status: 500 });
   }
 }

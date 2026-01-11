@@ -1,50 +1,79 @@
-// app/api/yahoo/route.js
-// Proxies requests to Yahoo Finance API to avoid CORS issues
+// app/api/grok/route.js
+// Proxies requests to xAI Grok API
 
-export async function GET(request) {
+export async function POST(request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const ticker = searchParams.get('ticker');
+    const { prompt } = await request.json();
     
-    if (!ticker) {
-      return Response.json({ error: 'Ticker required' }, { status: 400 });
+    const GROK_KEY = process.env.NEXT_PUBLIC_GROK_KEY;
+    
+    if (!GROK_KEY) {
+      return Response.json({ error: 'Grok API key not configured' }, { status: 500 });
     }
 
-    const response = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=true`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      }
-    );
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GROK_KEY}`
+      },
+      body: JSON.stringify({
+        model: "grok-4",
+        messages: [
+          { 
+            role: "system",
+            content: "You are an elite hedge fund analyst. Be concise. When asked to provide scores, always include them at the end of your response in the exact format requested."
+          },
+          { 
+            role: "user", 
+            content: prompt 
+          }
+        ],
+        max_tokens: 1200,
+        temperature: 0.3
+      })
+    });
 
     if (!response.ok) {
-      return Response.json({ error: `Yahoo API error: ${response.status}` }, { status: response.status });
+      const errorText = await response.text();
+      console.error('Grok API error:', response.status, errorText);
+      return Response.json({ error: `Grok API error: ${response.status}`, analysis: errorText }, { status: response.status });
     }
 
     const data = await response.json();
-    const result = data.chart?.result?.[0];
+    let text = data.choices?.[0]?.message?.content || '';
     
-    if (!result) {
-      return Response.json({ error: 'No data found' }, { status: 404 });
+    // Clean up markdown
+    text = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/#/g, '').replace(/`/g, '');
+    
+    // Extract metrics if present
+    let insiderConviction = null;
+    const convictionMatch = text.match(/INSIDER_CONVICTION[:\s=]*(\d+)/i);
+    if (convictionMatch) {
+      insiderConviction = Math.min(100, parseInt(convictionMatch[1]));
     }
-
-    const meta = result.meta;
     
-    return Response.json({
-      ticker: meta.symbol,
-      regularMarketPrice: meta.regularMarketPrice,
-      previousClose: meta.previousClose || meta.chartPreviousClose,
-      preMarketPrice: meta.preMarketPrice || null,
-      preMarketChange: meta.preMarketChangePercent || null,
-      postMarketPrice: meta.postMarketPrice || null,
-      postMarketChange: meta.postMarketChangePercent || null,
-      marketState: meta.marketState // PRE, REGULAR, POST, CLOSED
+    let cupHandleScore = null;
+    const cupHandleMatch = text.match(/CUP_HANDLE_SCORE[:\s=]*(\d+)/i);
+    if (cupHandleMatch) {
+      cupHandleScore = Math.min(100, parseInt(cupHandleMatch[1]));
+    }
+    
+    let upsidePct = null;
+    const upsideMatch = text.match(/UPSIDE_PCT[:\s=]*([+-]?\d+)/i);
+    if (upsideMatch) {
+      upsidePct = parseInt(upsideMatch[1]);
+    }
+    
+    return Response.json({ 
+      analysis: text || 'No response from AI',
+      insiderConviction,
+      cupHandleScore,
+      upsidePct
     });
     
   } catch (error) {
-    console.error('Yahoo route error:', error);
-    return Response.json({ error: error.message }, { status: 500 });
+    console.error('Grok route error:', error);
+    return Response.json({ error: error.message, analysis: 'Error occurred' }, { status: 500 });
   }
 }

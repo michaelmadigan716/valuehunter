@@ -938,7 +938,6 @@ export default function StockResearchApp() {
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
   const [sectorFilter, setSectorFilter] = useState('all');
-  const [hideNetCashNegative, setHideNetCashNegative] = useState(false);
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
   
   // Matty Buffet prompt (editable)
@@ -1030,6 +1029,20 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
   const [technicalCount, setTechnicalCount] = useState(10);
   const [mattyCount, setMattyCount] = useState(10);
   const [grokModel, setGrokModel] = useState('grok-4');
+  const [singularityBatchSize, setSingularityBatchSize] = useState(15);
+  
+  // Filter settings
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState({
+    hideNetCashNegative: false,
+    minSingularityScore: 0,
+    excludeBanks: false,
+    excludeFood: false,
+    excludeHealthcare: false,
+    excludeInsurance: false,
+    excludeREIT: false
+  });
+  
   const [aiWeights, setAiWeights] = useState({
     conviction: 15,
     upside: 15,
@@ -1302,14 +1315,14 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Pre/post market updated` });
   };
 
-  // Batch scan for SINGULARITY SCORE (0-100)
+  // Batch scan for SINGULARITY SCORE (0-100) and category detection
   const runSingularityScan = async () => {
     if (isScanningSupplyChain || stocks.length === 0) return;
     
     setIsScanningSupplyChain(true);
     setError(null);
     
-    const batchSize = 15;
+    const batchSize = singularityBatchSize;
     const totalBatches = Math.ceil(stocks.length / batchSize);
     setSupplyChainProgress({ current: 0, total: stocks.length });
     
@@ -1324,28 +1337,25 @@ End with: 8MO_PREDICTION: [number from -80 to +800]
       
       const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
       
-      const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, advanced robotics, and abundant energy that will transform civilization.
+      const prompt = `Analyze these stocks for SINGULARITY relevance and categorize them.
 
-Score each stock from 0-100 on how CRITICAL they are to enabling the singularity across these supply chains:
+SINGULARITY SCORE (0-100): How critical is this company to AI, robotics, energy transition?
+- COMPUTE: Chips, GPUs, AI accelerators, lithography, chip packaging, photonics, quantum
+- POWER: Data centers, cooling, nuclear, transformers, batteries, grid equipment
+- ROBOTICS: Actuators, motors, sensors, lidar, rare earth magnets, humanoid components
 
-COMPUTE & SEMIS: Chips (GPUs, AI accelerators, custom silicon), lithography equipment, chip packaging, testing equipment, advanced materials, photonics, quantum computing hardware.
+CATEGORY DETECTION - Mark TRUE if the company is primarily in these sectors:
+- isBank: Banks, financial services, credit cards, payment processing, lending
+- isFood: Food production, restaurants, grocery, beverages, consumer packaged goods
+- isHealthcare: Pharmaceuticals, biotech, hospitals, medical devices, health insurance
+- isInsurance: Insurance companies (life, property, auto, reinsurance)
+- isREIT: Real estate investment trusts, property management
 
-INFRASTRUCTURE & POWER: Data centers, liquid cooling systems, copper suppliers, nuclear micro-reactors, transformers, electrical grid equipment, next-gen batteries (solid state), power conversion.
-
-EMBODIMENT (ROBOTICS): Actuators, precision motors, sensors (lidar, vision, touch), rare earth magnets for motors, precision bearings, humanoid robot components, drones, autonomous systems.
-
-SCORING GUIDE:
-0-20 = No meaningful connection to singularity supply chains
-21-40 = Tangential/indirect exposure
-41-60 = Moderate supplier, some relevance
-61-80 = Important supplier, significant exposure to singularity themes
-81-100 = Critical/irreplaceable supplier, pure play on singularity infrastructure
-
-STOCKS TO ANALYZE:
+STOCKS:
 ${stockList}
 
-Respond with ONLY a JSON array. Each object must have ticker and a singularity score (0-100):
-[{"ticker":"ABC","singularity":85},{"ticker":"XYZ","singularity":12}]`;
+Respond with ONLY a JSON array:
+[{"ticker":"ABC","singularity":85,"isBank":false,"isFood":false,"isHealthcare":false,"isInsurance":false,"isREIT":false}]`;
 
       try {
         const response = await fetch("/api/grok", {
@@ -1366,12 +1376,17 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
             console.warn('Failed to parse Singularity response:', e);
           }
           
-          // Update stocks with Singularity score
+          // Update stocks with Singularity score and categories
           scores.forEach(item => {
             updatedStocks = updatedStocks.map(s => 
               s.ticker === item.ticker ? {
                 ...s,
-                singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
+                singularityScore: Math.min(100, Math.max(0, item.singularity || 0)),
+                isBank: item.isBank || false,
+                isFood: item.isFood || false,
+                isHealthcare: item.isHealthcare || false,
+                isInsurance: item.isInsurance || false,
+                isREIT: item.isREIT || false
               } : s
             );
           });
@@ -1685,7 +1700,7 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
         setFullSpectrumPhase('Running Singularity Scan...');
         setIsScanningSupplyChain(true);
         
-        const batchSize = 15;
+        const batchSize = singularityBatchSize;
         const totalBatches = Math.ceil(currentStocks.length / batchSize);
         setSupplyChainProgress({ current: 0, total: currentStocks.length });
         
@@ -1700,18 +1715,25 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
           
           const stockList = batchStocks.map(s => `${s.ticker}: ${s.name} (${s.sector || 'Unknown'})`).join('\n');
           
-          const prompt = `You are analyzing stocks for their relevance to the SINGULARITY - the convergence of AGI, advanced robotics, and abundant energy.
+          const prompt = `Analyze these stocks for SINGULARITY relevance and categorize them.
 
-Score each stock from 0-100 on how CRITICAL they are to enabling the singularity:
+SINGULARITY SCORE (0-100): How critical is this company to AI, robotics, energy transition?
+- COMPUTE: Chips, GPUs, AI accelerators, lithography, chip packaging, photonics, quantum
+- POWER: Data centers, cooling, nuclear, transformers, batteries, grid equipment
+- ROBOTICS: Actuators, motors, sensors, lidar, rare earth magnets, humanoid components
 
-COMPUTE & SEMIS: Chips (GPUs, AI accelerators), lithography, chip packaging, testing equipment, photonics, quantum computing.
-INFRASTRUCTURE & POWER: Data centers, liquid cooling, copper, nuclear micro-reactors, transformers, next-gen batteries.
-EMBODIMENT (ROBOTICS): Actuators, motors, sensors, rare earth magnets, precision bearings, humanoid components, drones.
-
-SCORING: 0-20 = No connection | 21-40 = Tangential | 41-60 = Moderate | 61-80 = Important supplier | 81-100 = Critical/pure play
+CATEGORY DETECTION - Mark TRUE if the company is primarily in these sectors:
+- isBank: Banks, financial services, credit cards, payment processing, lending
+- isFood: Food production, restaurants, grocery, beverages, consumer packaged goods
+- isHealthcare: Pharmaceuticals, biotech, hospitals, medical devices, health insurance
+- isInsurance: Insurance companies (life, property, auto, reinsurance)
+- isREIT: Real estate investment trusts, property management
 
 STOCKS:
 ${stockList}
+
+Respond with ONLY a JSON array:
+[{"ticker":"ABC","singularity":85,"isBank":false,"isFood":false,"isHealthcare":false,"isInsurance":false,"isREIT":false}]`;
 
 Respond with ONLY a JSON array, no markdown, no explanation:
 [{"ticker":"ABC","singularity":85},{"ticker":"XYZ","singularity":12}]`;
@@ -1745,7 +1767,12 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   updatedStocks = updatedStocks.map(s => 
                     s.ticker === item.ticker ? {
                       ...s,
-                      singularityScore: Math.min(100, Math.max(0, item.singularity || 0))
+                      singularityScore: Math.min(100, Math.max(0, item.singularity || 0)),
+                      isBank: item.isBank || false,
+                      isFood: item.isFood || false,
+                      isHealthcare: item.isHealthcare || false,
+                      isInsurance: item.isInsurance || false,
+                      isREIT: item.isREIT || false
                     } : s
                   );
                 });
@@ -1883,7 +1910,13 @@ Respond with ONLY a JSON array, no markdown, no explanation:
 
   const sorted = [...stocks]
     .filter(s => matchesCategory(s, sectorFilter))
-    .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+    .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+    .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+    .filter(s => !filters.excludeBanks || !s.isBank)
+    .filter(s => !filters.excludeFood || !s.isFood)
+    .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
+    .filter(s => !filters.excludeInsurance || !s.isInsurance)
+    .filter(s => !filters.excludeREIT || !s.isREIT)
     .sort((a, b) => {
       if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
       if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
@@ -2006,7 +2039,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   onClick={() => {
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
-                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runGrokAnalysis(currentView);
                   }} 
@@ -2031,7 +2064,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   onClick={() => {
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
-                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runTechnicalAnalysis(currentView);
                   }} 
@@ -2056,7 +2089,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   onClick={() => {
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
-                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runMattyAnalysis(currentView);
                   }} 
@@ -2347,6 +2380,30 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                 </div>
               </div>
               
+              {/* Singularity Batch Size */}
+              <div className="mb-4 p-3 rounded-lg border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-400" />
+                    <div>
+                      <span className="text-sm text-slate-200">Singularity Scan Batch Size</span>
+                      <p className="text-xs text-slate-500">Stocks per AI call (smaller = more accurate, slower)</p>
+                    </div>
+                  </div>
+                  <select 
+                    value={singularityBatchSize} 
+                    onChange={e => setSingularityBatchSize(parseInt(e.target.value))}
+                    className="rounded-lg px-3 py-2 text-sm border outline-none"
+                    style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(245,158,11,0.3)', color: '#fbbf24' }}
+                  >
+                    <option value={1}>1 stock (most accurate)</option>
+                    <option value={5}>5 stocks</option>
+                    <option value={15}>15 stocks (default)</option>
+                    <option value={30}>30 stocks (fastest)</option>
+                  </select>
+                </div>
+              </div>
+              
               {/* Market Cap Settings */}
               <div className="flex items-center justify-between p-3 rounded-lg border mb-3" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
                 <div>
@@ -2593,19 +2650,19 @@ Respond with ONLY a JSON array, no markdown, no explanation:
           <div className="col-span-9">
             <div className="card rounded-2xl border border-slate-800/50 overflow-hidden">
               <div className="p-5 border-b border-slate-800/50 flex items-center justify-between">
-                <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
+                <div><h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-indigo-400" />Stock Rankings</h2><p className="text-xs text-slate-500">{sorted.length} of {stocks.length} stocks {lastUpdate && `• ${lastUpdate.toLocaleTimeString()}`}</p></div>
                 <div className="flex gap-3 items-center">
                   <button 
-                    onClick={() => setHideNetCashNegative(!hideNetCashNegative)}
+                    onClick={() => setShowFilters(!showFilters)}
                     className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
                     style={{ 
-                      background: hideNetCashNegative ? 'rgba(16,185,129,0.2)' : 'rgba(30,41,59,0.5)', 
-                      borderColor: hideNetCashNegative ? 'rgba(16,185,129,0.5)' : 'rgba(51,65,85,0.5)', 
-                      color: hideNetCashNegative ? '#34d399' : '#94a3b8' 
+                      background: showFilters || Object.values(filters).some(v => v === true || v > 0) ? 'rgba(139,92,246,0.2)' : 'rgba(30,41,59,0.5)', 
+                      borderColor: showFilters || Object.values(filters).some(v => v === true || v > 0) ? 'rgba(139,92,246,0.5)' : 'rgba(51,65,85,0.5)', 
+                      color: showFilters || Object.values(filters).some(v => v === true || v > 0) ? '#a78bfa' : '#94a3b8' 
                     }}
                   >
-                    <Banknote className="w-4 h-4" />
-                    {hideNetCashNegative ? 'Net Cash+ Only' : 'All Cash'}
+                    <Filter className="w-4 h-4" />
+                    Filters {Object.values(filters).filter(v => v === true || v > 0).length > 0 && `(${Object.values(filters).filter(v => v === true || v > 0).length})`}
                   </button>
                   <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm border outline-none" style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#cbd5e1' }}>
                     {Object.entries(STOCK_CATEGORIES).map(([key, cat]) => (
@@ -2624,6 +2681,97 @@ Respond with ONLY a JSON array, no markdown, no explanation:
               
               {/* Column Headers - Clickable for sorting */}
               {sorted.length > 0 && (
+              {/* Filter Panel */}
+              {showFilters && (
+                <div className="p-4 border-b border-slate-800/50" style={{ background: 'rgba(139,92,246,0.05)' }}>
+                  <div className="grid grid-cols-4 gap-4">
+                    {/* Net Cash Filter */}
+                    <div className="flex items-center justify-between p-3 rounded-lg border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
+                      <div className="flex items-center gap-2">
+                        <Banknote className="w-4 h-4 text-emerald-400" />
+                        <span className="text-sm text-slate-200">Net Cash+ Only</span>
+                      </div>
+                      <button 
+                        onClick={() => setFilters(f => ({...f, hideNetCashNegative: !f.hideNetCashNegative}))}
+                        className="w-10 h-5 rounded-full transition-colors"
+                        style={{ background: filters.hideNetCashNegative ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                      >
+                        <div className="w-4 h-4 rounded-full bg-white transition-transform" style={{ transform: filters.hideNetCashNegative ? 'translateX(22px)' : 'translateX(2px)' }} />
+                      </button>
+                    </div>
+                    
+                    {/* Min Singularity Score */}
+                    <div className="p-3 rounded-lg border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.2)' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="w-4 h-4 text-amber-400" />
+                        <span className="text-sm text-slate-200">Min Singularity</span>
+                      </div>
+                      <select 
+                        value={filters.minSingularityScore}
+                        onChange={e => setFilters(f => ({...f, minSingularityScore: parseInt(e.target.value)}))}
+                        className="w-full rounded px-2 py-1 text-sm border outline-none"
+                        style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(245,158,11,0.3)', color: '#fbbf24' }}
+                      >
+                        <option value={0}>No minimum</option>
+                        <option value={30}>30+</option>
+                        <option value={50}>50+</option>
+                        <option value={70}>70+</option>
+                        <option value={80}>80+</option>
+                      </select>
+                    </div>
+                    
+                    {/* Category Exclusions */}
+                    <div className="col-span-2 p-3 rounded-lg border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <X className="w-4 h-4 text-red-400" />
+                        <span className="text-sm text-slate-200">Exclude Categories</span>
+                        <span className="text-xs text-slate-500">(detected by Singularity scan)</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { key: 'excludeBanks', label: 'Banks' },
+                          { key: 'excludeFood', label: 'Food' },
+                          { key: 'excludeHealthcare', label: 'Healthcare' },
+                          { key: 'excludeInsurance', label: 'Insurance' },
+                          { key: 'excludeREIT', label: 'REITs' }
+                        ].map(cat => (
+                          <button
+                            key={cat.key}
+                            onClick={() => setFilters(f => ({...f, [cat.key]: !f[cat.key]}))}
+                            className="px-2 py-1 rounded text-xs font-medium transition-colors"
+                            style={{ 
+                              background: filters[cat.key] ? 'rgba(239,68,68,0.3)' : 'rgba(30,41,59,0.5)',
+                              color: filters[cat.key] ? '#f87171' : '#94a3b8',
+                              border: `1px solid ${filters[cat.key] ? 'rgba(239,68,68,0.5)' : 'rgba(51,65,85,0.5)'}`
+                            }}
+                          >
+                            {filters[cat.key] ? '✕ ' : ''}{cat.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Clear All Filters */}
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      onClick={() => setFilters({
+                        hideNetCashNegative: false,
+                        minSingularityScore: 0,
+                        excludeBanks: false,
+                        excludeFood: false,
+                        excludeHealthcare: false,
+                        excludeInsurance: false,
+                        excludeREIT: false
+                      })}
+                      className="px-3 py-1 rounded text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Clear All Filters
+                    </button>
+                  </div>
+                </div>
+              )}
+              
                 <div className="px-4 py-2 border-b border-slate-800/50 flex items-center gap-4 text-xs text-slate-500 font-medium" style={{ background: 'rgba(15,23,42,0.5)' }}>
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>

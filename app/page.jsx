@@ -104,6 +104,44 @@ async function getPrevDay(ticker) {
   } catch (e) { return null; }
 }
 
+// Get pre-market and after-hours data from Polygon snapshot
+async function getExtendedHours(ticker) {
+  try {
+    const res = await fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_KEY}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const snapshot = data.ticker;
+    
+    if (!snapshot) return null;
+    
+    const prevClose = snapshot.prevDay?.c || snapshot.day?.c;
+    const preMarket = snapshot.preMarket;
+    const afterHours = snapshot.afterHours;
+    
+    let preMarketChange = null;
+    let afterHoursChange = null;
+    
+    if (preMarket?.price && prevClose) {
+      preMarketChange = ((preMarket.price - prevClose) / prevClose) * 100;
+    }
+    
+    if (afterHours?.price && prevClose) {
+      afterHoursChange = ((afterHours.price - prevClose) / prevClose) * 100;
+    }
+    
+    return {
+      preMarketPrice: preMarket?.price || null,
+      preMarketChange: preMarketChange,
+      afterHoursPrice: afterHours?.price || null,
+      afterHoursChange: afterHoursChange,
+      lastUpdate: new Date().toISOString()
+    };
+  } catch (e) { 
+    console.warn(`Extended hours failed for ${ticker}:`, e);
+    return null; 
+  }
+}
+
 async function get52WeekData(ticker) {
   try {
     const endDate = new Date().toISOString().split('T')[0];
@@ -351,92 +389,156 @@ async function getOptionsSentiment(ticker) {
 }
 
 // ============================================
-// GROK AI ANALYSIS - Deep analysis focused on future potential
+// GROK AI ANALYSIS - Insider Conviction Focus
 // ============================================
 async function getAIAnalysis(stock) {
-  console.log(`Starting Grok AI analysis for ${stock.ticker}...`);
+  console.log(`Starting Grok Conviction analysis for ${stock.ticker}...`);
   
   try {
-    // Calculate price position metrics for cup & handle analysis
-    const priceRange = stock.high52 - stock.low52;
-    const currentPosition = ((stock.price - stock.low52) / priceRange * 100).toFixed(1);
-    
-    const prompt = `Analyze ${stock.ticker} (${stock.name}) for a value investor seeking 50-200%+ gains.
+    const prompt = `Analyze INSIDER CONVICTION for ${stock.ticker} (${stock.name}).
 
 STOCK DATA:
 - Current Price: $${stock.price?.toFixed(2)}
 - Market Cap: $${stock.marketCap}M
-- 52-Week Low: $${stock.low52?.toFixed(2)}
-- 52-Week High: $${stock.high52?.toFixed(2)}
-- Current position: ${currentPosition}% of 52-week range (0% = at low, 100% = at high)
-- Distance from low: +${stock.fromLow?.toFixed(1)}%
 - Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'}
 - Last Insider Buy: ${stock.lastInsiderPurchase?.date ? stock.lastInsiderPurchase.date + ' ($' + Math.round(stock.lastInsiderPurchase.amount).toLocaleString() + ')' : 'None found'}
 
-ANALYZE THESE 4 AREAS:
+FOCUS EXCLUSIVELY ON INSIDER CONVICTION - How much skin in the game do insiders have?
 
-1. UPSIDE POTENTIAL: What catalysts could drive major gains? Earnings, contracts, FDA, M&A?
+Research and analyze:
+1. INSIDER OWNERSHIP %: What percentage of shares do insiders (CEO, CFO, directors, founders) own?
+2. RECENT PURCHASES: Have insiders been buying in the open market recently? Size of purchases?
+3. NET WORTH COMMITMENT: How significant are their holdings relative to their likely net worth? A CEO with $50M in stock when their salary is $500k = huge conviction.
+4. SELLING PATTERNS: Have insiders been selling, or holding/buying? Sales for diversification vs. loss of faith?
+5. CLUSTER BUYING: Multiple insiders buying together = stronger signal
 
-2. INSIDER CONVICTION: What percentage do insiders own? Have they been buying recently?
+CONVICTION SCORING:
+- 0-20: No insider ownership, or heavy insider selling
+- 21-40: Minimal insider ownership (<2%), no recent buys
+- 41-60: Moderate ownership (2-10%), occasional insider activity
+- 61-80: Strong ownership (10-25%), recent meaningful purchases
+- 81-100: Exceptional ownership (>25%), founders still heavily invested, recent large purchases, insiders buying with significant % of their net worth
 
-3. CUP AND HANDLE PATTERN ANALYSIS:
-Look at the price data carefully. A perfect cup and handle has:
-- A rounded "U" shaped bottom (not V-shaped) forming the cup
-- Price recovered 50-100% of the prior decline
-- A small pullback forming the handle (10-15% from cup high)
-- Handle should be in upper half of the cup
-- Current price near the breakout point (top of cup)
+Write 2-3 sentences about their insider conviction. Plain text only.
 
-Based on the data: The stock is at ${currentPosition}% of its 52-week range, ${stock.fromLow?.toFixed(1)}% above its low.
+END WITH EXACTLY THIS LINE:
+INSIDER_CONVICTION: [number from 0 to 100]`;
 
-Rate how well this fits a cup and handle pattern from 0-100:
-- 0-20: No cup and handle pattern present
-- 21-40: Vague resemblance but missing key elements  
-- 41-60: Partial pattern, some elements present
-- 61-80: Good cup and handle forming, most elements present
-- 81-100: Textbook cup and handle, ready for breakout
+    const response = await fetch("/api/grok", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt })
+    });
 
-4. KEY RISKS: What could go wrong?
+    if (!response.ok) {
+      const errorData = await response.json();
+      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null };
+    }
 
-Write 4-6 sentences analysis. Plain text only.
+    const data = await response.json();
+    
+    return { 
+      analysis: data.analysis, 
+      insiderConviction: data.insiderConviction
+    };
+  } catch (e) {
+    console.error('Grok Conviction analysis failed:', e);
+    return { analysis: `Error: ${e.message}`, insiderConviction: null };
+  }
+}
 
-END WITH EXACTLY THESE THREE LINES:
-UPSIDE_PCT: [number from -50 to 200]
-INSIDER_CONVICTION: [number from 0 to 100]
+// ============================================
+// TECHNICAL ANALYSIS - Cup and Handle Deep Dive
+// ============================================
+async function getTechnicalAnalysis(stock) {
+  console.log(`Starting Technical Analysis for ${stock.ticker}...`);
+  
+  try {
+    const priceRange = stock.high52 - stock.low52;
+    const currentPosition = ((stock.price - stock.low52) / priceRange * 100).toFixed(1);
+    const fromHigh = ((stock.high52 - stock.price) / stock.high52 * 100).toFixed(1);
+    
+    const prompt = `You are an expert technical analyst specializing in CUP AND HANDLE patterns. Analyze ${stock.ticker} (${stock.name}).
+
+PRICE DATA:
+- Current Price: $${stock.price?.toFixed(2)}
+- 52-Week Low: $${stock.low52?.toFixed(2)}
+- 52-Week High: $${stock.high52?.toFixed(2)}
+- Position in 52-Week Range: ${currentPosition}% (0% = at low, 100% = at high)
+- Distance from 52-Week Low: +${stock.fromLow?.toFixed(1)}%
+- Distance from 52-Week High: -${fromHigh}%
+
+ANALYZE FOR CUP AND HANDLE PATTERN:
+
+A PERFECT cup and handle requires ALL of these elements:
+
+THE CUP:
+1. Prior uptrend before the cup formed
+2. Rounded "U" shaped bottom (NOT a sharp V-bottom)
+3. Cup depth typically 12-35% from prior high
+4. Cup duration: 7 weeks to 65 weeks (longer = stronger)
+5. Both sides of cup should be roughly symmetrical
+6. Right side of cup should show increasing volume
+
+THE HANDLE:
+1. Forms in the UPPER HALF of the cup (above the midpoint)
+2. Handle pullback is 8-12% from cup's right side high (max 15%)
+3. Handle should drift DOWN slightly or move sideways (never up)
+4. Handle duration: 1-4 weeks minimum
+5. Volume should be light and decreasing in handle
+6. Handle should NOT drop below the cup's midpoint
+
+THE BREAKOUT:
+1. Price breaks above the handle's resistance (left side of handle)
+2. Volume should surge 40-50%+ above average on breakout
+3. Ideal buy point is just above the handle's high
+
+Based on the data provided (${currentPosition}% in range, ${stock.fromLow?.toFixed(1)}% from low, ${fromHigh}% from high):
+
+EVALUATE each element and determine if this could be a cup and handle setup.
+
+CUP & HANDLE SCORING:
+- 0-15: Definitely NOT a cup and handle - wrong pattern entirely
+- 16-30: Very unlikely - missing most key elements
+- 31-45: Possible but weak - some elements present, many missing
+- 46-60: Developing pattern - several elements present, needs confirmation
+- 61-75: Good pattern forming - most elements present, watching for handle/breakout
+- 76-85: Strong pattern - nearly all elements present, high probability setup
+- 86-100: Textbook perfect - all elements present, breakout imminent or occurring
+
+Be STRICT in your scoring. Most stocks do NOT have valid cup and handle patterns.
+
+Write 2-3 sentences about the technical pattern. Plain text only.
+
+END WITH EXACTLY THIS LINE:
 CUP_HANDLE_SCORE: [number from 0 to 100]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prompt })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, isTechnical: true })
     });
 
-    console.log(`Grok API response status: ${response.status}`);
-    
     if (!response.ok) {
       const errorData = await response.json();
-      console.error(`Grok API error:`, errorData);
-      return { analysis: `API Error: ${errorData.error || response.status}`, insiderConviction: null, upsidePct: null, cupHandleScore: null };
+      return { technicalAnalysis: `API Error: ${errorData.error || response.status}`, cupHandleScore: null };
     }
 
     const data = await response.json();
-    console.log(`Grok returned - upside: ${data.upsidePct}, conviction: ${data.insiderConviction}, cupHandleScore: ${data.cupHandleScore}`);
     
-    if (data.analysis) {
-      return { 
-        analysis: data.analysis, 
-        insiderConviction: data.insiderConviction,
-        upsidePct: data.upsidePct,
-        cupHandleScore: data.cupHandleScore
-      };
+    // Extract cup handle score
+    let cupHandleScore = null;
+    const match = data.analysis?.match(/CUP_HANDLE_SCORE[:\s]*(\d+)/i);
+    if (match) {
+      cupHandleScore = Math.min(100, Math.max(0, parseInt(match[1])));
     }
     
-    return { analysis: data.error || 'No response from AI', insiderConviction: null, upsidePct: null, cupHandleScore: null };
+    let analysis = data.analysis?.replace(/CUP_HANDLE_SCORE[:\s]*\d+%?/gi, '').trim() || 'No response';
+    
+    return { technicalAnalysis: analysis, cupHandleScore };
   } catch (e) {
-    console.error('Grok AI analysis failed:', e);
-    return { analysis: `Error: ${e.message}`, insiderConviction: null, upsidePct: null, cupHandleScore: null };
+    console.error('Technical analysis failed:', e);
+    return { technicalAnalysis: `Error: ${e.message}`, cupHandleScore: null };
   }
 }
 
@@ -793,6 +895,7 @@ export default function StockResearchApp() {
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isAnalyzingMatty, setIsAnalyzingMatty] = useState(false);
+  const [isAnalyzingTechnical, setIsAnalyzingTechnical] = useState(false);
   const [isScanningSupplyChain, setIsScanningSupplyChain] = useState(false);
   const [isRunningFullSpectrum, setIsRunningFullSpectrum] = useState(false);
   const [isRunningOracle, setIsRunningOracle] = useState(false);
@@ -802,6 +905,7 @@ export default function StockResearchApp() {
   const [showFullSpectrumModal, setShowFullSpectrumModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [mattyProgress, setMattyProgress] = useState({ current: 0, total: 0 });
+  const [technicalProgress, setTechnicalProgress] = useState({ current: 0, total: 0 });
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
   const [discoveryStatus, setDiscoveryStatus] = useState(Object.fromEntries(discoveryAgents.map(a => [a.id, 'idle'])));
   const [sortBy, setSortBy] = useState('compositeScore');
@@ -810,36 +914,35 @@ export default function StockResearchApp() {
   const [supplyChainProgress, setSupplyChainProgress] = useState({ current: 0, total: 0 });
   
   // Matty Buffet prompt (editable)
-  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a "new age" Warren Buffet who specializes in high-risk, high-reward plays focused on the SINGULARITY revolution. You're extremely optimistic about stocks positioned for the convergence of AI, robotics, and abundant energy.
+  const DEFAULT_MATTY_PROMPT = `You are Matty Buffet - a sharp-eyed investor hunting for stocks that could 4X within a year. You focus on singularity plays (AI, robotics, energy, rare earths) but you're NOT easily impressed.
 
-YOUR SPECIALTY SECTORS (you get EXCITED about these):
-- Solar & renewable energy
-- Robotics & automation  
-- Battery technology & energy storage
-- Rare earth materials & mining
-- Semiconductor supply chain
-- Nuclear energy (fission & fusion)
-- AI infrastructure (data centers, cooling, power)
-- Humanoid robot components (actuators, sensors, motors)
+CRITICAL EVALUATION - Ask yourself:
+1. Does this company have a REAL competitive moat? (Not just being in the right sector)
+2. Are the financials solid? (Cash position, debt, revenue trend)
+3. Is the valuation reasonable for a 4X? (Already priced in?)
+4. What's the SPECIFIC catalyst that drives 4X growth?
+5. What could go wrong? (Competition, execution risk, macro)
 
-YOUR ANALYSIS STYLE:
-- You make BOLD predictions when a stock has everything going for it
-- You're brutally honest about stocks with no singularity potential
-- You consider: market position, supply chain importance, management, financials, and industry tailwinds
-- You think in terms of "Will robots/AI need this? Will the energy explosion need this?"
+BE SKEPTICAL: Just being in solar/robotics/batteries doesn't mean 4X. Most won't. Only rate high (70%+) if you see:
+- Clear path to 4X revenue/earnings
+- Strong insider buying
+- Undervalued vs peers
+- Imminent catalyst
 
-SCORING (4X_POTENTIAL - chance this stock 4x's in the next year):
-- 0-10%: No chance, wrong sector or fundamentally broken
-- 11-30%: Unlikely, weak position or too much competition
-- 31-50%: Possible if sector explodes and they execute well
-- 51-70%: Good chance, well-positioned for singularity tailwinds
-- 71-85%: Strong chance, critical supplier with solid fundamentals
-- 86-100%: Near certain, perfect storm of position + timing + fundamentals
+Keep response to 3-4 sentences. Be specific about WHY or WHY NOT.
 
-Be conversational and give your honest Matty Buffet take. End with:
-4X_POTENTIAL: [number 0-100]`;
+End with: 4X_POTENTIAL: [0-100]`;
 
   const [mattyPrompt, setMattyPrompt] = useState(DEFAULT_MATTY_PROMPT);
+  const [mattyAnalyzeCount, setMattyAnalyzeCount] = useState(10);
+  const [isRefreshingPremarket, setIsRefreshingPremarket] = useState(false);
+  
+  // Global settings
+  const [globalSettings, setGlobalSettings] = useState({
+    minMarketCap: 40,      // in millions
+    maxMarketCap: 400,     // in millions
+    useCustomMarketCap: false
+  });
   
   // Session management
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -991,65 +1094,83 @@ Be conversational and give your honest Matty Buffet take. End with:
     return () => clearInterval(interval);
   }, [currentSessionId]);
 
-  // Separate Grok AI Analysis function - analyzes in current visible order
+  // Separate Grok AI Analysis function - Insider Conviction focus
   const runGrokAnalysis = async (stocksInOrder) => {
-    if (isAnalyzingAI || stocks.length === 0) return;
+    if (stocks.length === 0) return;
     
     setIsAnalyzingAI(true);
     setError(null);
     
-    // Use the passed-in order (from sorted/filtered view), or fall back to stocks
     const orderedStocks = stocksInOrder || stocks;
-    
-    // Use aiAnalyzeCount, or all stocks if set to 0
     const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setAiProgress({ current: 0, total: stocksToAnalyze.length });
     
-    let updatedStocks = [...stocks];
-    
     for (let i = 0; i < stocksToAnalyze.length; i++) {
       setAiProgress({ current: i + 1, total: stocksToAnalyze.length });
-      setStatus({ type: 'loading', msg: `Grok analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+      setStatus({ type: 'loading', msg: `Conviction scan: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
       const result = await getAIAnalysis(stocksToAnalyze[i]);
       
-      updatedStocks = updatedStocks.map(s => 
+      // Update stocks in state directly to allow parallel scans
+      setStocks(prev => prev.map(s => 
         s.ticker === stocksToAnalyze[i].ticker ? { 
           ...s, 
           aiAnalysis: result.analysis,
-          insiderConviction: result.insiderConviction,
-          upsidePct: result.upsidePct,
-          cupHandleScore: result.cupHandleScore
+          insiderConviction: result.insiderConviction
         } : s
-      );
-      setStocks(updatedStocks);
+      ));
       
-      // Rate limit - wait 2 seconds between calls
       if (i < stocksToAnalyze.length - 1) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
       }
-    }
-    
-    // Recalculate scores with new AI data
-    const reScored = calcScores(updatedStocks, weights, aiWeights);
-    setStocks(reScored);
-    
-    // Save to current session
-    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: reScored.length };
-    if (currentSessionId) {
-      saveSession(currentSessionId, reScored, scanStats);
-      setSessions(getAllSessions());
     }
     
     setIsAnalyzingAI(false);
     setAiProgress({ current: 0, total: 0 });
-    setStatus({ type: 'live', msg: `${stocks.length} stocks • AI analysis complete` });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Conviction scan complete` });
+  };
+
+  // Technical Analysis - Cup and Handle deep dive
+  const runTechnicalAnalysis = async (stocksInOrder) => {
+    if (stocks.length === 0) return;
+    
+    setIsAnalyzingTechnical(true);
+    setError(null);
+    
+    const orderedStocks = stocksInOrder || stocks;
+    const countToAnalyze = aiAnalyzeCount === 0 ? orderedStocks.length : Math.min(aiAnalyzeCount, orderedStocks.length);
+    const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
+    setTechnicalProgress({ current: 0, total: stocksToAnalyze.length });
+    
+    for (let i = 0; i < stocksToAnalyze.length; i++) {
+      setTechnicalProgress({ current: i + 1, total: stocksToAnalyze.length });
+      setStatus({ type: 'loading', msg: `Technical scan: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+      
+      const result = await getTechnicalAnalysis(stocksToAnalyze[i]);
+      
+      // Update stocks in state directly to allow parallel scans
+      setStocks(prev => prev.map(s => 
+        s.ticker === stocksToAnalyze[i].ticker ? { 
+          ...s, 
+          technicalAnalysis: result.technicalAnalysis,
+          cupHandleScore: result.cupHandleScore
+        } : s
+      ));
+      
+      if (i < stocksToAnalyze.length - 1) {
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+    
+    setIsAnalyzingTechnical(false);
+    setTechnicalProgress({ current: 0, total: 0 });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Technical scan complete` });
   };
 
   // Matty Buffet Analysis - 4X Potential scoring
   const runMattyAnalysis = async (stocksInOrder) => {
-    if (isAnalyzingMatty || stocks.length === 0) return;
+    if (stocks.length === 0) return;
     
     setIsAnalyzingMatty(true);
     setError(null);
@@ -1059,38 +1180,80 @@ Be conversational and give your honest Matty Buffet take. End with:
     const stocksToAnalyze = orderedStocks.slice(0, countToAnalyze);
     setMattyProgress({ current: 0, total: stocksToAnalyze.length });
     
-    let updatedStocks = [...stocks];
-    
     for (let i = 0; i < stocksToAnalyze.length; i++) {
       setMattyProgress({ current: i + 1, total: stocksToAnalyze.length });
-      setStatus({ type: 'loading', msg: `Matty analyzing ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
+      setStatus({ type: 'loading', msg: `Matty: ${stocksToAnalyze[i].ticker} (${i + 1}/${stocksToAnalyze.length})...` });
       
       const result = await getMattyAnalysis(stocksToAnalyze[i], mattyPrompt);
       
-      updatedStocks = updatedStocks.map(s => 
+      // Update stocks in state directly to allow parallel scans
+      setStocks(prev => prev.map(s => 
         s.ticker === stocksToAnalyze[i].ticker ? { 
           ...s, 
           mattyAnalysis: result.mattyAnalysis,
           fourXPotential: result.fourXPotential
         } : s
-      );
-      setStocks(updatedStocks);
+      ));
       
       if (i < stocksToAnalyze.length - 1) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
       }
-    }
-    
-    // Save to current session
-    const scanStats = { phase: 'complete', current: scanProgress.total, total: scanProgress.total, found: updatedStocks.length };
-    if (currentSessionId) {
-      saveSession(currentSessionId, updatedStocks, scanStats);
-      setSessions(getAllSessions());
     }
     
     setIsAnalyzingMatty(false);
     setMattyProgress({ current: 0, total: 0 });
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Matty analysis complete` });
+  };
+
+  // Refresh pre/post market data for all stocks
+  const refreshPremarketData = async () => {
+    if (isRefreshingPremarket || stocks.length === 0) return;
+    
+    setIsRefreshingPremarket(true);
+    setStatus({ type: 'loading', msg: 'Refreshing pre/post market data...' });
+    
+    let updatedStocks = [...stocks];
+    const batchSize = 10;
+    
+    for (let i = 0; i < stocks.length; i += batchSize) {
+      const batch = stocks.slice(i, i + batchSize);
+      
+      const results = await Promise.all(
+        batch.map(s => getExtendedHours(s.ticker))
+      );
+      
+      results.forEach((extData, idx) => {
+        if (extData) {
+          const stockIdx = i + idx;
+          updatedStocks = updatedStocks.map((s, sIdx) => 
+            sIdx === stockIdx ? {
+              ...s,
+              preMarketChange: extData.preMarketChange,
+              afterHoursChange: extData.afterHoursChange,
+              preMarketPrice: extData.preMarketPrice,
+              afterHoursPrice: extData.afterHoursPrice
+            } : s
+          );
+        }
+      });
+      
+      setStocks([...updatedStocks]);
+      setStatus({ type: 'loading', msg: `Refreshing pre/post market... ${Math.min(i + batchSize, stocks.length)}/${stocks.length}` });
+      
+      if (i + batchSize < stocks.length) {
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    
+    // Save to session
+    if (currentSessionId) {
+      const scanStats = { phase: 'complete', current: stocks.length, total: stocks.length, found: stocks.length };
+      saveSession(currentSessionId, updatedStocks, scanStats);
+      setSessions(getAllSessions());
+    }
+    
+    setIsRefreshingPremarket(false);
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Pre/post market updated` });
   };
 
   // Batch scan for SINGULARITY SCORE (0-100)
@@ -1274,11 +1437,15 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
 
       const qualifiedTickers = [];
       
+      // Use global settings for market cap or defaults
+      const minMC = globalSettings.useCustomMarketCap ? globalSettings.minMarketCap * 1_000_000 : MIN_MARKET_CAP;
+      const maxMC = globalSettings.useCustomMarketCap ? globalSettings.maxMarketCap * 1_000_000 : MAX_MARKET_CAP;
+      
       for (let i = 0; i < allTickers.length; i++) {
         const t = allTickers[i];
         const details = await getTickerDetails(t.ticker);
         
-        if (details?.market_cap && details.market_cap >= MIN_MARKET_CAP && details.market_cap <= MAX_MARKET_CAP) {
+        if (details?.market_cap && details.market_cap >= minMC && details.market_cap <= maxMC) {
           qualifiedTickers.push({ ticker: t.ticker, details });
           setScanProgress(p => ({ ...p, found: qualifiedTickers.length }));
         }
@@ -1404,6 +1571,11 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
 
       const qualifiedTickers = [];
       const batchSize = 50;
+      
+      // Use global settings for market cap or defaults
+      const minMC = globalSettings.useCustomMarketCap ? globalSettings.minMarketCap * 1_000_000 : MIN_MARKET_CAP;
+      const maxMC = globalSettings.useCustomMarketCap ? globalSettings.maxMarketCap * 1_000_000 : MAX_MARKET_CAP;
+      
       for (let i = 0; i < allTickers.length; i += batchSize) {
         const batch = allTickers.slice(i, i + batchSize);
         
@@ -1411,7 +1583,7 @@ Respond with ONLY a JSON array. Each object must have ticker and a singularity s
           const ticker = tickerData.ticker;
           const details = await getTickerDetails(ticker);
           if (!details?.market_cap) return null;
-          if (details.market_cap < MIN_MARKET_CAP || details.market_cap > MAX_MARKET_CAP) return null;
+          if (details.market_cap < minMC || details.market_cap > maxMC) return null;
           return { ticker, details };
         });
         
@@ -1695,6 +1867,12 @@ Respond with ONLY a JSON array, no markdown, no explanation:
       if (sortBy === 'fourXPotential') {
         return (b.fourXPotential ?? -1) - (a.fourXPotential ?? -1);
       }
+      if (sortBy === 'preMarketChange') {
+        return (b.preMarketChange ?? -999) - (a.preMarketChange ?? -999);
+      }
+      if (sortBy === 'afterHoursChange') {
+        return (b.afterHoursChange ?? -999) - (a.afterHoursChange ?? -999);
+      }
       return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
     });
 
@@ -1792,40 +1970,53 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   <option value={0}>All</option>
                 </select>
                 
-                {/* Grok AI Button */}
+                {/* Grok AI Button - Conviction Focus */}
                 <button 
                   onClick={() => {
-                    // Get current sorted/filtered view
                     const currentView = [...stocks]
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
-                      .sort((a, b) => {
-                        if (sortBy === 'compositeScore') return b.compositeScore - a.compositeScore;
-                        if (sortBy === 'netCash') return (b.netCash || 0) - (a.netCash || 0);
-                        if (sortBy === 'insiderDate') {
-                          const dateA = a.lastInsiderPurchase?.date ? new Date(a.lastInsiderPurchase.date).getTime() : 0;
-                          const dateB = b.lastInsiderPurchase?.date ? new Date(b.lastInsiderPurchase.date).getTime() : 0;
-                          return dateB - dateA;
-                        }
-                        if (sortBy === 'upsidePct') return (b.upsidePct ?? -999) - (a.upsidePct ?? -999);
-                        if (sortBy === 'insiderConviction') return (b.insiderConviction ?? -1) - (a.insiderConviction ?? -1);
-                        return (b.agentScores?.[sortBy] || 0) - (a.agentScores?.[sortBy] || 0);
-                      });
+                      .sort((a, b) => b.compositeScore - a.compositeScore);
                     runGrokAnalysis(currentView);
                   }} 
-                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
+                  disabled={isScanning}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
-                    background: isAnalyzingAI ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', 
-                    borderColor: 'rgba(239,68,68,0.3)', 
-                    color: '#f87171',
-                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain) ? 0.7 : 1
+                    background: isAnalyzingAI ? 'rgba(16,185,129,0.3)' : 'rgba(16,185,129,0.1)', 
+                    borderColor: 'rgba(16,185,129,0.3)', 
+                    color: '#34d399',
+                    opacity: isScanning ? 0.5 : 1
                   }}
                 >
                   {isAnalyzingAI ? (
-                    <><RefreshCw className="w-4 h-4 animate-spin" />Analyzing {aiProgress.current}/{aiProgress.total}...</>
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Conv {aiProgress.current}/{aiProgress.total}...</>
                   ) : (
-                    <><Sparkles className="w-4 h-4" />Grok AI</>
+                    <><Sparkles className="w-4 h-4" />Conviction</>
+                  )}
+                </button>
+                
+                {/* Technical Analysis Button - Cup & Handle */}
+                <button 
+                  onClick={() => {
+                    const currentView = [...stocks]
+                      .filter(s => matchesCategory(s, sectorFilter))
+                      .filter(s => !hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
+                      .sort((a, b) => b.compositeScore - a.compositeScore);
+                    runTechnicalAnalysis(currentView);
+                  }} 
+                  disabled={isScanning}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isAnalyzingTechnical ? 'rgba(99,102,241,0.3)' : 'rgba(99,102,241,0.1)', 
+                    borderColor: 'rgba(99,102,241,0.3)', 
+                    color: '#a5b4fc',
+                    opacity: isScanning ? 0.5 : 1
+                  }}
+                >
+                  {isAnalyzingTechnical ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />C&H {technicalProgress.current}/{technicalProgress.total}...</>
+                  ) : (
+                    <><Activity className="w-4 h-4" />Technical</>
                   )}
                 </button>
                 
@@ -1838,13 +2029,13 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                       .sort((a, b) => b.compositeScore - a.compositeScore);
                     runMattyAnalysis(currentView);
                   }} 
-                  disabled={isAnalyzingMatty || isScanning || isScanningSupplyChain || isAnalyzingAI}
+                  disabled={isScanning}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
                     background: isAnalyzingMatty ? 'rgba(236,72,153,0.3)' : 'rgba(236,72,153,0.1)', 
                     borderColor: 'rgba(236,72,153,0.3)', 
                     color: '#f472b6',
-                    opacity: (isAnalyzingMatty || isScanning || isScanningSupplyChain || isAnalyzingAI) ? 0.7 : 1
+                    opacity: isScanning ? 0.5 : 1
                   }}
                 >
                   {isAnalyzingMatty ? (
@@ -1854,16 +2045,36 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   )}
                 </button>
                 
+                {/* Refresh Pre/AH Button */}
+                <button 
+                  onClick={refreshPremarketData} 
+                  disabled={isRefreshingPremarket || isScanning}
+                  className="px-3 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
+                  style={{ 
+                    background: isRefreshingPremarket ? 'rgba(34,211,238,0.3)' : 'rgba(34,211,238,0.1)', 
+                    borderColor: 'rgba(34,211,238,0.3)', 
+                    color: '#22d3ee',
+                    opacity: isRefreshingPremarket ? 0.7 : 1
+                  }}
+                  title="Refresh Pre-Market & After-Hours data"
+                >
+                  {isRefreshingPremarket ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                </button>
+                
                 {/* Supply Chain Scan Button */}
                 <button 
                   onClick={runSingularityScan} 
-                  disabled={isAnalyzingAI || isScanning || isScanningSupplyChain}
+                  disabled={isScanning}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium border flex items-center gap-2"
                   style={{ 
                     background: isScanningSupplyChain ? 'rgba(245,158,11,0.3)' : 'rgba(245,158,11,0.1)', 
                     borderColor: 'rgba(245,158,11,0.3)', 
                     color: '#fbbf24',
-                    opacity: (isAnalyzingAI || isScanning || isScanningSupplyChain) ? 0.7 : 1
+                    opacity: isScanning ? 0.5 : 1
                   }}
                 >
                   {isScanningSupplyChain ? (
@@ -2023,49 +2234,127 @@ Respond with ONLY a JSON array, no markdown, no explanation:
         </div>
       )}
 
-      {/* Settings Modal - Matty Buffet Prompt Editor */}
+      {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
-          <div className="card rounded-2xl border border-slate-700 p-6 w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden flex flex-col" style={{ background: 'rgba(15,23,42,0.98)' }}>
+          <div className="card rounded-2xl border border-slate-700 p-6 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto" style={{ background: 'rgba(15,23,42,0.98)' }}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2"><TrendingUp className="w-6 h-6 text-pink-400" />Matty Buffet Settings</h2>
+              <h2 className="text-xl font-bold text-white flex items-center gap-2"><Sliders className="w-6 h-6 text-pink-400" />Settings</h2>
               <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
             
-            <p className="text-sm text-slate-400 mb-4">Customize Matty Buffet's analysis prompt. He's a "new age" Warren Buffet focused on singularity stocks.</p>
+            {/* Scan Settings Section */}
+            <div className="mb-6 p-4 rounded-xl border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
+              <h3 className="text-sm font-semibold text-indigo-400 mb-3">Scan Settings</h3>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Grok AI Count</label>
+                  <select 
+                    value={aiAnalyzeCount} 
+                    onChange={e => setAiAnalyzeCount(parseInt(e.target.value))}
+                    className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                    style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(99,102,241,0.3)', color: '#a5b4fc' }}
+                  >
+                    <option value={5}>5 stocks</option>
+                    <option value={10}>10 stocks</option>
+                    <option value={25}>25 stocks</option>
+                    <option value={50}>50 stocks</option>
+                    <option value={100}>100 stocks</option>
+                    <option value={0}>All stocks</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Matty Buffet Count</label>
+                  <select 
+                    value={mattyAnalyzeCount} 
+                    onChange={e => setMattyAnalyzeCount(parseInt(e.target.value))}
+                    className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                    style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(236,72,153,0.3)', color: '#f472b6' }}
+                  >
+                    <option value={5}>5 stocks</option>
+                    <option value={10}>10 stocks</option>
+                    <option value={25}>25 stocks</option>
+                    <option value={50}>50 stocks</option>
+                    <option value={100}>100 stocks</option>
+                    <option value={0}>All stocks</option>
+                  </select>
+                </div>
+              </div>
+              
+              {/* Market Cap Settings */}
+              <div className="flex items-center justify-between p-3 rounded-lg border mb-3" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
+                <div>
+                  <span className="text-sm text-slate-200">Custom Market Cap Range</span>
+                  <p className="text-xs text-slate-500">Default: $40M - $400M</p>
+                </div>
+                <button 
+                  onClick={() => setGlobalSettings(p => ({...p, useCustomMarketCap: !p.useCustomMarketCap}))}
+                  className="w-12 h-6 rounded-full transition-colors"
+                  style={{ background: globalSettings.useCustomMarketCap ? '#10b981' : 'rgba(51,65,85,0.5)' }}
+                >
+                  <div className="w-5 h-5 rounded-full bg-white transition-transform" style={{ transform: globalSettings.useCustomMarketCap ? 'translateX(26px)' : 'translateX(2px)' }} />
+                </button>
+              </div>
+              
+              {globalSettings.useCustomMarketCap && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1 block">Min Market Cap ($M)</label>
+                    <input 
+                      type="number"
+                      value={globalSettings.minMarketCap}
+                      onChange={e => setGlobalSettings(p => ({...p, minMarketCap: parseInt(e.target.value) || 0}))}
+                      className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                      style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 mb-1 block">Max Market Cap ($M)</label>
+                    <input 
+                      type="number"
+                      value={globalSettings.maxMarketCap}
+                      onChange={e => setGlobalSettings(p => ({...p, maxMarketCap: parseInt(e.target.value) || 1000}))}
+                      className="w-full rounded-lg px-3 py-2 text-sm border outline-none"
+                      style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
             
-            <div className="flex-1 overflow-hidden flex flex-col">
-              <label className="text-sm text-slate-300 mb-2 block">Matty's System Prompt</label>
+            {/* Matty Buffet Prompt Section */}
+            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.05)', borderColor: 'rgba(236,72,153,0.2)' }}>
+              <h3 className="text-sm font-semibold text-pink-400 mb-3">Matty Buffet Prompt</h3>
+              <p className="text-xs text-slate-500 mb-2">Customize how Matty analyzes stocks for 4X potential</p>
               <textarea 
                 value={mattyPrompt}
                 onChange={e => setMattyPrompt(e.target.value)}
-                className="flex-1 w-full rounded-lg px-3 py-3 text-sm border outline-none resize-none"
+                className="w-full rounded-lg px-3 py-3 text-sm border outline-none resize-none"
                 style={{ 
                   background: 'rgba(30,41,59,0.5)', 
                   borderColor: 'rgba(236,72,153,0.3)', 
                   color: '#e2e8f0',
-                  minHeight: '300px'
+                  minHeight: '200px'
                 }}
                 placeholder="Enter Matty Buffet's system prompt..."
               />
-            </div>
-            
-            <div className="flex gap-3 mt-4">
               <button 
                 onClick={() => setMattyPrompt(DEFAULT_MATTY_PROMPT)} 
-                className="px-4 py-2.5 rounded-xl text-sm font-medium border"
+                className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium border"
                 style={{ background: 'rgba(30,41,59,0.5)', borderColor: 'rgba(51,65,85,0.5)', color: '#94a3b8' }}
               >
                 Reset to Default
               </button>
-              <button 
-                onClick={() => setShowSettings(false)} 
-                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold"
-                style={{ background: 'linear-gradient(90deg, #ec4899, #f472b6)', color: 'white' }}
-              >
-                Save & Close
-              </button>
             </div>
+            
+            <button 
+              onClick={() => setShowSettings(false)} 
+              className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold"
+              style={{ background: 'linear-gradient(90deg, #ec4899, #f472b6)', color: 'white' }}
+            >
+              Save & Close
+            </button>
           </div>
         </div>
       )}
@@ -2274,46 +2563,65 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
                   <div className="w-24 text-right">Price / MCap</div>
-                  <div className="w-20 text-center">Net Cash</div>
                   <div 
-                    className="w-24 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'preMarketChange' ? 'compositeScore' : 'preMarketChange')}
+                    title="Pre-Market Change %"
+                  >
+                    Pre
+                    {sortBy === 'preMarketChange' && <span className="text-cyan-400">↓</span>}
+                  </div>
+                  <div 
+                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'afterHoursChange' ? 'compositeScore' : 'afterHoursChange')}
+                    title="After-Hours Change %"
+                  >
+                    AH
+                    {sortBy === 'afterHoursChange' && <span className="text-cyan-400">↓</span>}
+                  </div>
+                  <div className="w-16 text-center">Net Cash</div>
+                  <div 
+                    className="w-20 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'insiderDate' ? 'compositeScore' : 'insiderDate')}
                   >
-                    Insider Buy
+                    Insider
                     {sortBy === 'insiderDate' && <span className="text-emerald-400">↓</span>}
                   </div>
                   <div 
-                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'singularityScore' ? 'compositeScore' : 'singularityScore')}
+                    title="Singularity Score"
                   >
-                    Sing
+                    Sg
                     {sortBy === 'singularityScore' && <span className="text-amber-400">↓</span>}
                   </div>
                   <div 
-                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'fourXPotential' ? 'compositeScore' : 'fourXPotential')}
                     title="Matty Buffet 4X Potential"
                   >
-                    4X%
+                    4X
                     {sortBy === 'fourXPotential' && <span className="text-pink-400">↓</span>}
                   </div>
                   <div 
-                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'insiderConviction' ? 'compositeScore' : 'insiderConviction')}
+                    title="Insider Conviction"
                   >
-                    Conv
+                    Cv
                     {sortBy === 'insiderConviction' && <span className="text-emerald-400">↓</span>}
                   </div>
                   <div 
-                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'cupHandleScore' ? 'compositeScore' : 'cupHandleScore')}
+                    title="Cup & Handle Score"
                   >
-                    C&H
+                    CH
                     {sortBy === 'cupHandleScore' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-14 text-center">52wL</div>
+                  <div className="w-12 text-center">52wL</div>
                   <div 
-                    className="w-16 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy('compositeScore')}
                   >
                     Score
@@ -2335,20 +2643,41 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                           <div className="flex items-center gap-2">
                             <span className="mono font-bold text-lg text-slate-100">{s.ticker}</span>
                             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: s.change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: s.change >= 0 ? '#34d399' : '#f87171' }}>{s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%</span>
-                            {s.aiAnalysis && <Sparkles className="w-4 h-4 text-red-400" title="AI Analysis" />}
+                            {s.aiAnalysis && <Sparkles className="w-4 h-4 text-emerald-400" title={`Conviction: ${s.insiderConviction}%`} />}
+                            {s.technicalAnalysis && <Activity className="w-4 h-4 text-indigo-400" title={`C&H: ${s.cupHandleScore}`} />}
                             {s.mattyAnalysis && <TrendingUp className="w-4 h-4 text-pink-400" title={`Matty: ${s.fourXPotential}% 4X potential`} />}
                             {s.singularityScore >= 70 && <Zap className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.name}</p>
                         </div>
                         <div className="text-right w-24"><p className="mono text-sm font-semibold text-slate-200">${s.price?.toFixed(2)}</p><p className="text-xs text-indigo-400 mono">${s.marketCap}M</p></div>
-                        <div className="w-20 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
-                        <div className="w-24 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
+                        {/* Pre-Market */}
+                        <div className="w-14 text-center">
+                          {s.preMarketChange !== null && s.preMarketChange !== undefined ? (
+                            <span className="text-xs font-bold mono" style={{ color: s.preMarketChange >= 0 ? '#22d3ee' : '#f87171' }}>
+                              {s.preMarketChange >= 0 ? '+' : ''}{s.preMarketChange.toFixed(1)}%
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        {/* After-Hours */}
+                        <div className="w-14 text-center">
+                          {s.afterHoursChange !== null && s.afterHoursChange !== undefined ? (
+                            <span className="text-xs font-bold mono" style={{ color: s.afterHoursChange >= 0 ? '#22d3ee' : '#f87171' }}>
+                              {s.afterHoursChange >= 0 ? '+' : ''}{s.afterHoursChange.toFixed(1)}%
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-600">—</span>
+                          )}
+                        </div>
+                        <div className="w-16 text-center"><NetCashBadge amount={s.netCash} hasData={s.hasFinancials} /></div>
+                        <div className="w-20 text-center"><InsiderBadge data={s.lastInsiderPurchase} /></div>
                         {/* Singularity Score */}
-                        <div className="w-12 text-center">
+                        <div className="w-10 text-center">
                           {s.singularityScore !== null && s.singularityScore !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.singularityScore >= 70 ? 'rgba(245,158,11,0.2)' : s.singularityScore >= 40 ? 'rgba(100,116,139,0.2)' : 'rgba(51,65,85,0.2)',
                                 color: s.singularityScore >= 70 ? '#fbbf24' : s.singularityScore >= 40 ? '#94a3b8' : '#64748b'
@@ -2361,27 +2690,26 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                           )}
                         </div>
                         {/* 4X Potential (Matty Buffet) */}
-                        <div className="w-12 text-center">
+                        <div className="w-10 text-center">
                           {s.fourXPotential !== null && s.fourXPotential !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.fourXPotential >= 70 ? 'rgba(236,72,153,0.3)' : s.fourXPotential >= 40 ? 'rgba(236,72,153,0.15)' : 'rgba(51,65,85,0.2)',
                                 color: s.fourXPotential >= 70 ? '#f472b6' : s.fourXPotential >= 40 ? '#ec4899' : '#64748b'
                               }}
-                              title={s.mattyAnalysis ? 'Click to see Matty analysis' : ''}
                             >
-                              {s.fourXPotential}%
+                              {s.fourXPotential}
                             </span>
                           ) : (
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
                         {/* Conviction */}
-                        <div className="w-12 text-center">
+                        <div className="w-10 text-center">
                           {s.insiderConviction !== null && s.insiderConviction !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.insiderConviction >= 70 ? 'rgba(16,185,129,0.2)' : s.insiderConviction >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
                                 color: s.insiderConviction >= 70 ? '#34d399' : s.insiderConviction >= 40 ? '#fbbf24' : '#f87171'
@@ -2394,10 +2722,10 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                           )}
                         </div>
                         {/* Cup & Handle */}
-                        <div className="w-12 text-center">
+                        <div className="w-10 text-center">
                           {s.cupHandleScore !== null && s.cupHandleScore !== undefined ? (
                             <span 
-                              className="text-xs font-bold mono px-1 py-0.5 rounded"
+                              className="text-[10px] font-bold mono px-1 py-0.5 rounded"
                               style={{ 
                                 background: s.cupHandleScore >= 70 ? 'rgba(16,185,129,0.2)' : s.cupHandleScore >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(100,116,139,0.2)',
                                 color: s.cupHandleScore >= 70 ? '#34d399' : s.cupHandleScore >= 40 ? '#fbbf24' : '#64748b'
@@ -2409,18 +2737,26 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             <span className="text-xs text-slate-600">—</span>
                           )}
                         </div>
-                        <div className="w-14 text-center">
-                          <div className="mono text-xs font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
+                        <div className="w-12 text-center">
+                          <div className="mono text-[10px] font-semibold" style={{ color: s.fromLow < 20 ? '#34d399' : s.fromLow < 50 ? '#fbbf24' : '#f87171' }}>{s.fromLow?.toFixed(1)}%</div>
                         </div>
-                        <div className="w-16"><div className="flex items-center justify-between mb-1"><span className="mono text-sm font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
+                        <div className="w-14"><div className="flex items-center justify-between mb-1"><span className="mono text-xs font-bold text-indigo-400">{s.compositeScore.toFixed(1)}</span></div><div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(30,41,59,0.5)' }}><div className="h-full rounded-full" style={{ width: `${s.compositeScore}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }} /></div></div>
                         <div className="w-6">{selected?.ticker === s.ticker ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                       </div>
                       
                       {selected?.ticker === s.ticker && (
                         <div className="mt-4 pt-4 border-t border-slate-800/30">
                           {s.aiAnalysis && (
-                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.3)' }}>
-                              <h4 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" />Grok AI Analysis</h4>
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(16,185,129,0.08)', borderColor: 'rgba(16,185,129,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-2">
+                                <Sparkles className="w-4 h-4" />
+                                Insider Conviction Analysis
+                                {s.insiderConviction !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ background: s.insiderConviction >= 70 ? 'rgba(16,185,129,0.2)' : s.insiderConviction >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', color: s.insiderConviction >= 70 ? '#34d399' : s.insiderConviction >= 40 ? '#fbbf24' : '#f87171' }}>
+                                    {s.insiderConviction}% Conviction
+                                  </span>
+                                )}
+                              </h4>
                               <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.aiAnalysis}</p>
                             </div>
                           )}
@@ -2440,9 +2776,24 @@ Respond with ONLY a JSON array, no markdown, no explanation:
                             </div>
                           )}
                           
-                          {!s.aiAnalysis && !s.mattyAnalysis && i < 10 && (
-                            <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.2)' }}>
-                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-red-400" />Click "Grok AI" or "Matty 4X" to analyze</p>
+                          {s.technicalAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(99,102,241,0.08)', borderColor: 'rgba(99,102,241,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-indigo-400 mb-2 flex items-center gap-2">
+                                <Activity className="w-4 h-4" />
+                                Cup & Handle Analysis
+                                {s.cupHandleScore !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ background: s.cupHandleScore >= 70 ? 'rgba(16,185,129,0.2)' : s.cupHandleScore >= 40 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', color: s.cupHandleScore >= 70 ? '#34d399' : s.cupHandleScore >= 40 ? '#fbbf24' : '#f87171' }}>
+                                    {s.cupHandleScore} C&H Score
+                                  </span>
+                                )}
+                              </h4>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.technicalAnalysis}</p>
+                            </div>
+                          )}
+                          
+                          {!s.aiAnalysis && !s.mattyAnalysis && !s.technicalAnalysis && i < 10 && (
+                            <div className="mb-4 p-3 rounded-xl border" style={{ background: 'rgba(99,102,241,0.05)', borderColor: 'rgba(99,102,241,0.2)' }}>
+                              <p className="text-sm text-slate-400 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-400" />Run Conviction, Matty 4X, or C&H Scan to analyze</p>
                             </div>
                           )}
                           
@@ -2494,7 +2845,7 @@ Respond with ONLY a JSON array, no markdown, no explanation:
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <p className="text-xs text-slate-600">SingularityHunter • Polygon.io + Finnhub + xAI Grok Oracle</p>
-            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v2.1</span>
+            <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 mono">v2.3</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Stock Limit: {stockLimit === 0 ? 'All' : stockLimit}</span>

@@ -107,26 +107,41 @@ async function getPrevDay(ticker) {
 // Get pre-market and after-hours data from Polygon snapshot
 async function getExtendedHours(ticker) {
   try {
-    // Use our proxy API to avoid CORS issues with Yahoo Finance
-    const res = await fetch(`/api/yahoo?ticker=${ticker}`);
+    // Use Polygon's snapshot endpoint for real-time quotes including extended hours
+    const snapshotRes = await fetch(
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_KEY}`
+    );
     
-    if (!res.ok) {
-      console.warn(`Yahoo proxy error for ${ticker}: ${res.status}`);
+    if (!snapshotRes.ok) {
+      console.warn(`Polygon snapshot error for ${ticker}: ${snapshotRes.status}`);
       return null;
     }
     
-    const data = await res.json();
+    const snapshotData = await snapshotRes.json();
+    const ticker_data = snapshotData.ticker;
     
-    if (data.error) {
-      console.warn(`Yahoo error for ${ticker}: ${data.error}`);
+    if (!ticker_data) {
+      console.warn(`No snapshot data for ${ticker}`);
       return null;
     }
     
-    const regularMarketPrice = data.regularMarketPrice;
-    const previousClose = data.previousClose;
-    const preMarketPrice = data.preMarketPrice;
-    const postMarketPrice = data.postMarketPrice;
+    // Get previous day close
+    const prevDay = ticker_data.prevDay;
+    const previousClose = prevDay?.c || null;
     
+    // Get today's regular session data
+    const todayData = ticker_data.day;
+    const regularMarketPrice = todayData?.c || ticker_data.lastTrade?.p || previousClose;
+    
+    // Get pre-market data (from min aggregates before market open)
+    const preMarketData = ticker_data.preMarket;
+    const preMarketPrice = preMarketData?.close || preMarketData?.c || null;
+    
+    // Get after-hours data
+    const afterHoursData = ticker_data.afterHours;
+    const afterHoursPrice = afterHoursData?.close || afterHoursData?.c || null;
+    
+    // Calculate changes
     let preMarketChange = null;
     let afterHoursChange = null;
     
@@ -136,20 +151,39 @@ async function getExtendedHours(ticker) {
       console.log(`${ticker} Pre-market: $${preMarketPrice.toFixed(2)} (${preMarketChange.toFixed(2)}%)`);
     }
     
-    // After-hours: compare to regular market close
-    if (postMarketPrice && regularMarketPrice) {
-      afterHoursChange = ((postMarketPrice - regularMarketPrice) / regularMarketPrice) * 100;
-      console.log(`${ticker} After-hours: $${postMarketPrice.toFixed(2)} (${afterHoursChange.toFixed(2)}%)`);
+    // After-hours: compare to regular market close (or previous close if market hasn't opened)
+    const basePrice = regularMarketPrice || previousClose;
+    if (afterHoursPrice && basePrice) {
+      afterHoursChange = ((afterHoursPrice - basePrice) / basePrice) * 100;
+      console.log(`${ticker} After-hours: $${afterHoursPrice.toFixed(2)} (${afterHoursChange.toFixed(2)}%)`);
+    }
+    
+    // Determine market state
+    const now = new Date();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const dayOfWeek = now.getDay();
+    const timeInMinutes = hour * 60 + minute;
+    
+    let marketState = 'CLOSED';
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+      if (timeInMinutes >= 240 && timeInMinutes < 570) { // 4:00 AM - 9:30 AM ET
+        marketState = 'PRE';
+      } else if (timeInMinutes >= 570 && timeInMinutes < 960) { // 9:30 AM - 4:00 PM ET
+        marketState = 'REGULAR';
+      } else if (timeInMinutes >= 960 && timeInMinutes < 1200) { // 4:00 PM - 8:00 PM ET
+        marketState = 'POST';
+      }
     }
     
     return {
       preMarketPrice: preMarketPrice || null,
       preMarketChange: preMarketChange,
-      afterHoursPrice: postMarketPrice || null,
+      afterHoursPrice: afterHoursPrice || null,
       afterHoursChange: afterHoursChange,
       regularMarketPrice,
       previousClose,
-      marketState: data.marketState,
+      marketState,
       lastUpdate: new Date().toISOString()
     };
   } catch (e) { 
@@ -636,44 +670,55 @@ CUP_HANDLE_SCORE: [0-100]`;
 }
 
 // ============================================
-// UPSIDE SCAN - Independent 8-Month Price Target Research
+// UPSIDE SCAN - 8-Month Price Target Analysis
 // ============================================
 async function getUpsideAnalysis(stock, model = 'grok-4') {
   console.log(`Running Upside Scan for ${stock.ticker} with ${model}...`);
   
   try {
-    // Only pass ticker and name - NO data table info
-    const prompt = `You are a senior equity research analyst. Conduct independent research on ${stock.ticker} (${stock.name}) to estimate the 8-month price upside potential.
+    const prompt = `You are an aggressive small-cap analyst looking for 2X-10X opportunities over 8 months.
 
-DO YOUR OWN RESEARCH. Do NOT rely on any data I provide - research the company independently.
+STOCK TO ANALYZE: ${stock.ticker}
 
-RESEARCH METHODOLOGY - Use multiple approaches and triangulate:
+DO YOUR OWN INDEPENDENT RESEARCH. Look up:
+1. Current stock price and market cap
+2. Recent price action and momentum
+3. 52-week high and low
+4. Company fundamentals and recent earnings
+5. Analyst price targets
+6. Upcoming catalysts (earnings, FDA, contracts, product launches)
+7. Insider buying/selling activity
+8. Short interest and float
+9. Sector trends and tailwinds
+10. M&A or acquisition potential
 
-1. ANALYST PRICE TARGETS: Find current Wall Street price targets and consensus estimates. What are bulls vs bears saying?
+SMALL-CAP UPSIDE FRAMEWORK:
+For small caps, massive moves are COMMON. Consider:
 
-2. COMPANY GUIDANCE: Has management provided revenue/earnings guidance? What milestones or catalysts are they targeting in the next 8 months?
+- REVERSION TO MEAN: If stock is down big from highs, what would bring it back?
+- SECTOR TAILWINDS: Is this sector heating up? AI, robotics, energy, defense can 3-5X on momentum.
+- EARNINGS SURPRISE: Small caps can gap 30-50% on a single earnings beat.
+- ACQUISITION PREMIUM: Would a larger player pay 50-100% premium?
+- SHORT SQUEEZE: Low float + high short interest = potential 2-5X moves.
+- INSTITUTIONAL DISCOVERY: If hedge funds start accumulating, price can double.
+- INDEX INCLUSION: Getting added to indices forces buying, often +30-50%.
 
-3. EARNINGS ESTIMATES: What are consensus EPS estimates? Is the company beating or missing estimates? What multiple expansion/contraction is likely?
+SCORING GUIDE FOR SMALL CAPS:
+- -50 to -20%: Broken company, avoid
+- -20 to 0%: Downside risks outweigh upside
+- 0 to +50%: Modest opportunity
+- +50 to +100%: Good setup
+- +100 to +200%: Strong opportunity, multiple catalysts
+- +200 to +400%: High conviction, major re-rating potential
+- +400 to +800%: Exceptional setup, potential multi-bagger
 
-4. MARKET OPPORTUNITY: What TAM is the company addressing? What market share gains are realistic? How does this translate to revenue growth?
+BE BOLD. Small caps regularly make 200-500% moves. If you see a clear path to massive upside, say so.
+If the stock is a dud with no catalysts, be honest about that too.
 
-5. COMPARABLE VALUATION: How does the company trade vs peers on EV/Revenue, P/E, or other relevant metrics? Is there a re-rating opportunity?
+Write 2-3 sentences explaining your thesis and key catalysts based on your research.
 
-6. UPCOMING CATALYSTS: Product launches, FDA approvals, contract wins, earnings reports, investor days, index inclusion, M&A potential?
-
-7. RISK FACTORS: What could go wrong? Dilution, competition, execution risk, macro headwinds?
-
-SYNTHESIZE your research into a professional 2-3 paragraph analysis. Be specific with numbers and sources where possible.
-
-Your 8-month prediction should reflect:
-- Conservative case vs bull case scenarios
-- Probability-weighted expected return
-- Key assumptions driving your estimate
-
-END WITH EXACTLY THIS LINE:
-8MO_PREDICTION: [your predicted % change from current price, range -80 to +500]
-
-Example: 8MO_PREDICTION: +45 (meaning you expect 45% upside in 8 months)`;
+END WITH EXACTLY:
+8MO_PREDICTION: [number from -80 to +800]`;
 
     const response = await fetch("/api/grok", {
       method: "POST",
@@ -690,13 +735,13 @@ Example: 8MO_PREDICTION: +45 (meaning you expect 45% upside in 8 months)`;
     const data = await response.json();
     console.log('Upside scan response:', data);
     
-    // Use the mattyPrediction from API (renamed but same extraction)
+    // Extract prediction - allow higher range for small caps
     let upsidePrediction = data.mattyPrediction;
     
     if (upsidePrediction === null && data.analysis) {
       const match = data.analysis.match(/8MO_PREDICTION[:\s]*([+-]?\d+)/i);
       if (match) {
-        upsidePrediction = Math.min(500, Math.max(-80, parseInt(match[1])));
+        upsidePrediction = Math.min(800, Math.max(-80, parseInt(match[1])));
       }
     }
     
@@ -1016,6 +1061,7 @@ export default function StockResearchApp() {
   const [showSessions, setShowSessions] = useState(false);
   const [showFullSpectrumModal, setShowFullSpectrumModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showBaseScanMenu, setShowBaseScanMenu] = useState(false);
   const [upsideProgress, setUpsideProgress] = useState({ current: 0, total: 0 });
   const [technicalProgress, setTechnicalProgress] = useState({ current: 0, total: 0 });
   const [analysisStatus, setAnalysisStatus] = useState(Object.fromEntries(analysisAgents.map(a => [a.id, 'idle'])));
@@ -1368,6 +1414,88 @@ export default function StockResearchApp() {
     
     setIsRefreshingPremarket(false);
     setStatus({ type: 'live', msg: `${stocks.length} stocks • Pre/post market updated` });
+  };
+
+  // Refresh current stocks (re-fetch prices without adding new stocks)
+  const refreshCurrentStocks = async () => {
+    if (isScanning || stocks.length === 0) return;
+    
+    setIsScanning(true);
+    setError(null);
+    setStatus({ type: 'loading', msg: 'Refreshing current stocks...' });
+    setScanProgress({ phase: 'Refreshing prices...', current: 0, total: stocks.length, found: stocks.length });
+    
+    let updatedStocks = [...stocks];
+    
+    for (let i = 0; i < stocks.length; i++) {
+      const stock = stocks[i];
+      setScanProgress({ phase: 'Refreshing prices...', current: i + 1, total: stocks.length, found: stocks.length });
+      setStatus({ type: 'loading', msg: `Refreshing ${stock.ticker}... (${i + 1}/${stocks.length})` });
+      
+      try {
+        // Get latest price data
+        const priceRes = await fetch(
+          `https://api.polygon.io/v2/aggs/ticker/${stock.ticker}/prev?adjusted=true&apiKey=${POLYGON_KEY}`
+        );
+        const priceData = await priceRes.json();
+        const prevDay = priceData.results?.[0];
+        
+        if (prevDay) {
+          const currentPrice = prevDay.c;
+          const change = prevDay.o > 0 ? ((prevDay.c - prevDay.o) / prevDay.o) * 100 : 0;
+          
+          // Get fresh 52-week data
+          const weekData = await get52WeekData(stock.ticker);
+          let high52 = stock.high52, low52 = stock.low52;
+          if (weekData.length > 0) {
+            high52 = Math.max(...weekData.map(d => d.h));
+            low52 = Math.min(...weekData.map(d => d.l));
+          }
+          
+          const fromLow = low52 > 0 ? ((currentPrice - low52) / low52) * 100 : 0;
+          const positionIn52Week = high52 !== low52 ? ((currentPrice - low52) / (high52 - low52)) * 100 : 50;
+          
+          updatedStocks = updatedStocks.map(s => 
+            s.ticker === stock.ticker ? {
+              ...s,
+              price: currentPrice,
+              change,
+              high52,
+              low52,
+              fromLow,
+              positionIn52Week,
+              agentScores: {
+                ...s.agentScores,
+                pricePosition: Math.max(0, 100 - positionIn52Week)
+              }
+            } : s
+          );
+        }
+      } catch (e) {
+        console.error(`Failed to refresh ${stock.ticker}:`, e);
+      }
+      
+      // Small delay to avoid rate limiting
+      if (i < stocks.length - 1 && i % 5 === 4) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    
+    // Recalculate scores
+    const scoredStocks = calcScores(updatedStocks, weights, aiWeights);
+    setStocks(scoredStocks);
+    
+    // Save to session
+    if (currentSessionId) {
+      const scanStats = { phase: 'complete', current: stocks.length, total: stocks.length, found: stocks.length };
+      saveSession(currentSessionId, scoredStocks, scanStats);
+      setSessions(getAllSessions());
+    }
+    
+    setIsScanning(false);
+    setScanProgress({ phase: 'complete', current: stocks.length, total: stocks.length, found: stocks.length });
+    setStatus({ type: 'live', msg: `${stocks.length} stocks • Prices refreshed` });
+    setLastUpdate(new Date());
   };
 
   // Manually add stocks by ticker
@@ -2431,15 +2559,58 @@ Respond with ONLY a JSON array:
               <option value={0}>All stocks</option>
             </select>
             
-            {/* Run Base Scan Button */}
-            <button 
-              onClick={runBaseScan} 
-              disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum} 
-              className="px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" 
-              style={{ background: isScanning ? 'rgba(245,158,11,0.2)' : 'linear-gradient(90deg, #6366f1, #8b5cf6)', color: isScanning ? '#fcd34d' : 'white', opacity: (isAnalyzingAI || isRunningFullSpectrum) ? 0.5 : 1 }}
-            >
-              {isScanning && !isRunningFullSpectrum ? <><RefreshCw className="w-4 h-4 animate-spin" />Scanning...</> : <><Play className="w-4 h-4" />Run Base Scan</>}
-            </button>
+            {/* Run Base Scan Button with Dropdown */}
+            <div className="relative">
+              <div className="flex">
+                <button 
+                  onClick={runBaseScan} 
+                  disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum} 
+                  className="px-4 py-2.5 rounded-l-xl text-sm font-semibold flex items-center gap-2" 
+                  style={{ background: isScanning ? 'rgba(245,158,11,0.2)' : 'linear-gradient(90deg, #6366f1, #8b5cf6)', color: isScanning ? '#fcd34d' : 'white', opacity: (isAnalyzingAI || isRunningFullSpectrum) ? 0.5 : 1 }}
+                >
+                  {isScanning && !isRunningFullSpectrum ? <><RefreshCw className="w-4 h-4 animate-spin" />Scanning...</> : <><Play className="w-4 h-4" />Run Base Scan</>}
+                </button>
+                <button
+                  onClick={() => setShowBaseScanMenu(!showBaseScanMenu)}
+                  disabled={isScanning || isAnalyzingAI || isRunningFullSpectrum}
+                  className="px-2 py-2.5 rounded-r-xl text-sm font-semibold border-l border-white/20"
+                  style={{ background: 'linear-gradient(90deg, #8b5cf6, #7c3aed)', color: 'white', opacity: (isScanning || isAnalyzingAI || isRunningFullSpectrum) ? 0.5 : 1 }}
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {showBaseScanMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowBaseScanMenu(false)} />
+                  <div className="absolute top-full left-0 mt-2 w-64 rounded-xl border shadow-xl z-50" style={{ background: 'rgba(15,23,42,0.98)', borderColor: 'rgba(99,102,241,0.3)' }}>
+                    <button
+                      onClick={() => { runBaseScan(); setShowBaseScanMenu(false); }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 rounded-t-xl flex items-center gap-3"
+                      style={{ color: '#e2e8f0' }}
+                    >
+                    <Play className="w-4 h-4 text-indigo-400" />
+                    <div>
+                      <p className="font-medium">Find New Stocks</p>
+                      <p className="text-xs text-slate-500">Scan market for new small-caps</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => { refreshCurrentStocks(); setShowBaseScanMenu(false); }}
+                    disabled={stocks.length === 0}
+                    className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 rounded-b-xl flex items-center gap-3 border-t"
+                    style={{ color: stocks.length === 0 ? '#64748b' : '#e2e8f0', borderColor: 'rgba(51,65,85,0.5)' }}
+                  >
+                    <RefreshCw className="w-4 h-4 text-emerald-400" />
+                    <div>
+                      <p className="font-medium">Refresh Current Stocks</p>
+                      <p className="text-xs text-slate-500">{stocks.length > 0 ? `Update prices for ${stocks.length} stocks` : 'No stocks to refresh'}</p>
+                    </div>
+                  </button>
+                  </div>
+                </>
+              )}
+            </div>
             
             {/* Run Full Spectrum Button */}
             <button 

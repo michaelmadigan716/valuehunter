@@ -856,7 +856,7 @@ TEAM_SCORE: [0-100]`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model })
+      body: JSON.stringify({ prompt, isMatty: true, model })
     });
 
     if (!response.ok) {
@@ -944,7 +944,7 @@ PARABOLIC_SCORE: [0-100]`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model })
+      body: JSON.stringify({ prompt, isMatty: true, model })
     });
 
     if (!response.ok) {
@@ -977,80 +977,77 @@ PARABOLIC_SCORE: [0-100]`;
 }
 
 // ============================================
-// VALUATION ANALYSIS - Under/Overvalued Assessment
+// VALUATION ANALYSIS - Depressed Stock + Catalyst Potential
 // ============================================
 async function getValuationAnalysis(stock, model = 'grok-4') {
   console.log(`Running Valuation Analysis for ${stock.ticker} with ${model}...`);
   
   try {
-    const prompt = `You are a sophisticated valuation analyst who combines traditional DCF analysis with forward-looking market opportunity assessment. Analyze ${stock.ticker} (${stock.name}) to determine if it's UNDERVALUED or OVERVALUED.
+    const prompt = `You are a deep value analyst specializing in finding stocks that are DEPRESSED and FORGOTTEN by the market — sitting quietly with no news — that could EXPLODE when a catalyst finally hits. You hunt for coiled springs.
 
 STOCK DATA:
+- Ticker: ${stock.ticker} (${stock.name})
 - Current Price: $${stock.price?.toFixed(2)}
 - Market Cap: $${stock.marketCap}M
 - 52-Week Range: $${stock.low52?.toFixed(2)} - $${stock.high52?.toFixed(2)}
 - Position from 52W Low: +${stock.fromLow?.toFixed(1)}%
 - Net Cash: ${stock.netCash ? '$' + (stock.netCash / 1000000).toFixed(1) + 'M' : 'Unknown'}
+- Daily Change: ${stock.change?.toFixed(2)}%
 
-RESEARCH AND ANALYZE:
+ANALYZE WHETHER THIS STOCK IS A DEPRESSED COILED SPRING:
 
-1. CURRENT VALUATION METRICS:
-   - What is the current P/E, P/S, EV/EBITDA?
-   - How does it compare to sector peers?
-   - Is the market cap justified by current fundamentals?
+1. NEWS DROUGHT CHECK (MOST IMPORTANT):
+   - When was the LAST significant news, PR, or announcement from this company?
+   - Has it been weeks or months since any meaningful coverage?
+   - Is the stock being IGNORED by analysts and media?
+   - Low news = the stock price is NOT reflecting any upcoming catalysts = potential coiled spring
+   - If there's been recent hype or news coverage, that's ALREADY priced in = lower score
 
-2. REVENUE GROWTH TRAJECTORY:
-   - What is the historical revenue growth rate?
-   - What is the forward guidance?
-   - Any recent deals, contracts, or partnerships that guarantee future revenue?
-   - Backlog or deferred revenue that will convert?
+2. PRICE DEPRESSION SIGNALS:
+   - Is the stock near its 52-week low? Significantly below its highs?
+   - Has volume dried up (nobody is paying attention)?
+   - Has the stock been slowly bleeding or flat-lining for weeks/months?
+   - Are institutions quietly accumulating while retail has given up?
+   - A stock that's been beaten down and forgotten has MORE upside potential than one that's been running
 
-3. PROFIT POTENTIAL:
-   - Current margins and margin trajectory
-   - Path to profitability (if not profitable)
-   - Operating leverage as revenue scales
-   - Unit economics improvement potential
+3. UPCOMING CATALYST POTENTIAL:
+   - Is earnings coming up that could surprise?
+   - Could they announce a new contract, partnership, or deal?
+   - Are they in a sector where a macro catalyst could hit (AI spending, energy policy, defense budget)?
+   - Could they be an acquisition target?
+   - Any product launch, FDA approval, or regulatory decision pending?
+   - The KEY question: What could make people suddenly pay attention to this stock again?
 
-4. TOTAL ADDRESSABLE MARKET (TAM):
-   - What market(s) is this company addressing?
-   - How large is the TAM? Growing or shrinking?
-   - HIGH VALUE MARKETS (assign higher TAM potential):
-     * Solar/renewable energy infrastructure
-     * Raw materials for robotics (rare earths, motors, actuators, sensors)
-     * AI data center supply chain (cooling, power, networking)
-     * TPU/GPU/semiconductor supply chain
-     * Energy grid modernization
-     * Battery/energy storage materials
+4. FUNDAMENTAL FLOOR:
+   - Does the company have real revenue and a real business?
+   - Is the balance sheet strong enough to survive until the catalyst?
+   - Net cash position (cash rich companies can weather the drought)
+   - Are they still growing revenue even though nobody cares?
+   - Is the current market cap absurdly low relative to their actual business?
 
-5. REALISTIC MARKET CAPTURE:
-   - What % of TAM can this company realistically capture?
-   - Competitive moats (IP, relationships, scale, expertise)?
-   - Competition intensity?
-   - Barriers to entry they've built?
-   - Be REALISTIC - not every company in a hot market will capture significant share
-
-6. VALUATION SYNTHESIS:
-   - Compare current market cap to realistic future revenue potential
-   - Factor in execution risk and competition
-   - Consider time value (how many years to realize potential?)
+5. SECTOR TAILWINDS (BONUS):
+   - Is this company in a sector with massive secular tailwinds that the market is ignoring for THIS specific stock?
+   - HIGH VALUE sectors: Solar/renewables, robotics supply chain, AI data center infrastructure, semiconductor supply chain, energy grid, battery materials
+   - A forgotten company in a HOT sector is the ideal setup
 
 VALUATION SCORE (0-100):
-- 50 = PERFECTLY VALUED (fair price for expected value)
-- 51-70 = MODERATELY UNDERVALUED (good entry, 20-100% upside potential)
-- 71-90 = SIGNIFICANTLY UNDERVALUED (excellent opportunity, 100%+ upside)
-- 91-100 = EXTREMELY UNDERVALUED (rare, massive mispricing, potential multi-bagger)
-- 30-49 = MODERATELY OVERVALUED (limited upside, some downside risk)
-- 10-29 = SIGNIFICANTLY OVERVALUED (avoid, high downside risk)
-- 0-9 = EXTREMELY OVERVALUED (dangerous, potential 50%+ downside)
+- 50 = FAIR - priced correctly, news flow is normal, no special setup
+- 51-65 = MILDLY UNDERVALUED - somewhat quiet, decent catalyst potential
+- 66-80 = UNDERVALUED COILED SPRING - depressed price, no recent news, clear upcoming catalysts
+- 81-100 = EXTREME COILED SPRING - totally forgotten, near lows, strong business, imminent catalyst potential, could 2-5X on news
+- 35-49 = SLIGHTLY OVERVALUED - recent news already priced in, limited near-term catalysts
+- 15-34 = OVERVALUED - stock has already run, hype is priced in
+- 0-14 = VERY OVERVALUED - pumped up, all good news priced in, high risk of pullback
 
-IMPORTANT SCORING GUIDANCE:
-- Small companies in MASSIVE markets (AI, solar, robotics supply chains) with clear competitive advantages can score 70+ even at high P/S ratios
-- Companies with declining revenue or shrinking TAM should score under 50
-- Be REALISTIC about market capture - not every small cap will become a giant
-- Factor in balance sheet strength (net cash = less risk, net debt = more risk)
-- Consider management execution track record
+KEY SCORING RULES:
+- NO recent news + near 52w low + strong fundamentals + upcoming catalyst = SCORE 75+
+- Recent news/hype already driving price up = SCORE LOWER (already priced in)
+- Stock near 52w high with lots of coverage = SCORE UNDER 40 (no coiled spring left)
+- The LONGER the news drought + the STRONGER the business = the HIGHER the score
+- Net cash companies get bonus points (they can survive the wait)
+- Companies in AI/solar/robotics supply chains that are being IGNORED get bonus points
 
-Write 2-3 sentences explaining your valuation thesis and the key factors driving your score.
+Write 2-3 sentences: How long has this stock been quiet? What catalyst could wake it up? How much could it move?
 
 END WITH EXACTLY:
 VALUATION_SCORE: [0-100]`;
@@ -1058,7 +1055,7 @@ VALUATION_SCORE: [0-100]`;
     const response = await fetch("/api/grok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model })
+      body: JSON.stringify({ prompt, isMatty: true, model })
     });
 
     if (!response.ok) {
@@ -1384,6 +1381,8 @@ export default function StockResearchApp() {
     optionsHeat: 20,
   });
   const [selected, setSelected] = useState(null);
+  const [selectedStocks, setSelectedStocks] = useState(new Set()); // multi-select for targeted scans
+  const [showSelectedScanMenu, setShowSelectedScanMenu] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
   const [isAnalyzingExplosive, setIsAnalyzingExplosive] = useState(false);
@@ -1465,21 +1464,20 @@ export default function StockResearchApp() {
   const [scanProgress, setScanProgress] = useState({ phase: '', current: 0, total: 0, found: 0 });
   const [cacheAge, setCacheAge] = useState(null);
   const [aiProgress, setAiProgress] = useState({ current: 0, total: 0 });
-  const [convictionCount, setConvictionCount] = useState(10);
-  const [technicalCount, setTechnicalCount] = useState(10);
-  const [explosiveCount, setExplosiveCount] = useState(10);
-  const [teamCount, setTeamCount] = useState(10);
-  const [parabolicCount, setParabolicCount] = useState(10);
-  const [valuationCount, setValuationCount] = useState(10);
+  const [convictionCount, setConvictionCount] = useState(0);
+  const [technicalCount, setTechnicalCount] = useState(0);
+  const [explosiveCount, setExplosiveCount] = useState(0);
+  const [teamCount, setTeamCount] = useState(0);
+  const [parabolicCount, setParabolicCount] = useState(0);
+  const [valuationCount, setValuationCount] = useState(0);
   const [grokModel, setGrokModel] = useState('grok-4');
   const [singularityBatchSize, setSingularityBatchSize] = useState(15);
   
-  // Watchlists / Saved Lists
-  const [watchlists, setWatchlists] = useState([]);
-  const [activeWatchlist, setActiveWatchlist] = useState(null); // null = show all, or watchlist id
-  const [showWatchlistMenu, setShowWatchlistMenu] = useState(false);
-  const [newWatchlistName, setNewWatchlistName] = useState('');
-  const [showCreateWatchlist, setShowCreateWatchlist] = useState(false);
+  // Singularity Gate - minimum singularity score required for AI scans to run on a stock
+  const [singularityGate, setSingularityGate] = useState(0); // 0 = disabled, otherwise min score
+  
+  // Stock picker for adding to sessions
+  const [showStockPicker, setShowStockPicker] = useState(null); // ticker of stock showing picker
   
   // Top Gainers Filter
   const [showTopGainers, setShowTopGainers] = useState(false);
@@ -1586,16 +1584,6 @@ export default function StockResearchApp() {
     // Load sessions list
     setSessions(getAllSessions());
     
-    // Load watchlists
-    try {
-      const savedWatchlists = localStorage.getItem('valuehunter_watchlists');
-      if (savedWatchlists) {
-        setWatchlists(JSON.parse(savedWatchlists));
-      }
-    } catch (e) {
-      console.error('Failed to load watchlists:', e);
-    }
-    
     // Try to load current session
     const currentSession = loadCurrentSession();
     if (currentSession && currentSession.stocks?.length > 0) {
@@ -1621,55 +1609,25 @@ export default function StockResearchApp() {
     return () => clearInterval(interval);
   }, [currentSessionId]);
 
-  // Save watchlists to localStorage whenever they change
-  useEffect(() => {
-    if (watchlists.length > 0) {
-      localStorage.setItem('valuehunter_watchlists', JSON.stringify(watchlists));
+  // Add a stock to another session
+  const addStockToSession = (stock, targetSessionId) => {
+    const targetSession = loadSession(targetSessionId);
+    if (!targetSession) return;
+    
+    // Check if stock already exists in target session
+    if (targetSession.stocks.some(s => s.ticker === stock.ticker)) {
+      setStatus({ type: 'ready', msg: `${stock.ticker} already in ${targetSession.name}` });
+      return;
     }
-  }, [watchlists]);
-
-  // Watchlist functions
-  const createWatchlist = (name) => {
-    if (!name.trim()) return;
-    const newList = {
-      id: Date.now().toString(),
-      name: name.trim(),
-      tickers: [],
-      createdAt: Date.now()
-    };
-    setWatchlists(prev => [...prev, newList]);
-    setNewWatchlistName('');
-    setShowCreateWatchlist(false);
-  };
-
-  const deleteWatchlist = (listId) => {
-    setWatchlists(prev => prev.filter(w => w.id !== listId));
-    if (activeWatchlist === listId) {
-      setActiveWatchlist(null);
-    }
-  };
-
-  const addToWatchlist = (listId, ticker) => {
-    setWatchlists(prev => prev.map(w => {
-      if (w.id === listId && !w.tickers.includes(ticker)) {
-        return { ...w, tickers: [...w.tickers, ticker] };
-      }
-      return w;
-    }));
-  };
-
-  const removeFromWatchlist = (listId, ticker) => {
-    setWatchlists(prev => prev.map(w => {
-      if (w.id === listId) {
-        return { ...w, tickers: w.tickers.filter(t => t !== ticker) };
-      }
-      return w;
-    }));
-  };
-
-  const isInWatchlist = (listId, ticker) => {
-    const list = watchlists.find(w => w.id === listId);
-    return list ? list.tickers.includes(ticker) : false;
+    
+    // Add stock to target session
+    const updatedStocks = [...targetSession.stocks, stock];
+    saveSession(targetSessionId, { ...targetSession, stocks: updatedStocks });
+    
+    // Refresh sessions list
+    setSessions(getAllSessions());
+    setStatus({ type: 'live', msg: `Added ${stock.ticker} to ${targetSession.name}` });
+    setShowStockPicker(null);
   };
 
   // Separate Grok AI Analysis function - Insider Conviction focus
@@ -2843,8 +2801,6 @@ Respond with ONLY a JSON array:
   };
 
   const sorted = [...stocks]
-    // Filter by active watchlist
-    .filter(s => !activeWatchlist || watchlists.find(w => w.id === activeWatchlist)?.tickers.includes(s.ticker))
     // Filter by top gainers (previous day change)
     .filter(s => !showTopGainers || (s.change >= topGainersThreshold))
     .filter(s => matchesCategory(s, sectorFilter))
@@ -2893,6 +2849,14 @@ Respond with ONLY a JSON array:
       }
       if (sortBy === 'valuationScore') {
         return (b.valuationScore ?? -1) - (a.valuationScore ?? -1);
+      }
+      if (sortBy === 'fromLow') {
+        // Ascending - lowest % from 52w low first (closest to bottom)
+        return (a.fromLow ?? 999) - (b.fromLow ?? 999);
+      }
+      if (sortBy === 'fromLowDesc') {
+        // Descending - highest % from 52w low first (furthest from bottom)
+        return (b.fromLow ?? -1) - (a.fromLow ?? -1);
       }
       if (sortBy === 'extendedChange') {
         const extA = a.preMarketChange ?? a.afterHoursChange ?? -999;
@@ -2982,6 +2946,20 @@ Respond with ONLY a JSON array:
             
             {stocks.length > 0 && (
               <>
+                {/* Singularity Gate indicator */}
+                {singularityGate > 0 && (
+                  <div 
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 cursor-pointer"
+                    style={{ background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.4)', color: '#fbbf24' }}
+                    onClick={() => setShowSettings(true)}
+                    title={`Singularity Gate: only scanning stocks with score ≥ ${singularityGate} (${stocks.filter(s => (s.singularityScore || 0) >= singularityGate).length} stocks). Click to edit.`}
+                  >
+                    <Filter className="w-3 h-3" />
+                    Gate ≥{singularityGate}
+                    <span className="text-amber-500/70">({stocks.filter(s => (s.singularityScore || 0) >= singularityGate).length})</span>
+                  </div>
+                )}
+                
                 {/* Grok AI Button - Conviction Focus */}
                 <button 
                   onClick={() => {
@@ -2989,12 +2967,17 @@ Respond with ONLY a JSON array:
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .filter(s => !filters.excludeBanks || !s.isBank)
                       .filter(s => !filters.excludeFood || !s.isFood)
                       .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
+                    if (singularityGate > 0 && currentView.length === 0) {
+                      setError(`No stocks with Singularity Score ≥ ${singularityGate}. Run Singularity scan first or lower the gate.`);
+                      return;
+                    }
                     runGrokAnalysis(currentView);
                   }} 
                   disabled={isScanning}
@@ -3020,12 +3003,17 @@ Respond with ONLY a JSON array:
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .filter(s => !filters.excludeBanks || !s.isBank)
                       .filter(s => !filters.excludeFood || !s.isFood)
                       .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
+                    if (singularityGate > 0 && currentView.length === 0) {
+                      setError(`No stocks with Singularity Score ≥ ${singularityGate}. Run Singularity scan first or lower the gate.`);
+                      return;
+                    }
                     runTechnicalAnalysis(currentView);
                   }} 
                   disabled={isScanning}
@@ -3051,12 +3039,17 @@ Respond with ONLY a JSON array:
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .filter(s => !filters.excludeBanks || !s.isBank)
                       .filter(s => !filters.excludeFood || !s.isFood)
                       .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
+                    if (singularityGate > 0 && currentView.length === 0) {
+                      setError(`No stocks with Singularity Score ≥ ${singularityGate}. Run Singularity scan first or lower the gate.`);
+                      return;
+                    }
                     runExplosiveGrowthAnalysis(currentView);
                   }} 
                   disabled={isScanning}
@@ -3082,12 +3075,17 @@ Respond with ONLY a JSON array:
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .filter(s => !filters.excludeBanks || !s.isBank)
                       .filter(s => !filters.excludeFood || !s.isFood)
                       .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
+                    if (singularityGate > 0 && currentView.length === 0) {
+                      setError(`No stocks with Singularity Score ≥ ${singularityGate}. Run Singularity scan first or lower the gate.`);
+                      return;
+                    }
                     runTeamAnalysis(currentView);
                   }} 
                   disabled={isScanning}
@@ -3109,12 +3107,12 @@ Respond with ONLY a JSON array:
                 {/* Parabolic Continuation Button - for top gainers */}
                 <button 
                   onClick={() => {
-                    // Run on top gainers sorted by change
                     const topGainers = [...stocks]
                       .filter(s => s.change >= topGainersThreshold)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .sort((a, b) => (b.change || 0) - (a.change || 0));
                     if (topGainers.length === 0) {
-                      setError(`No stocks with ${topGainersThreshold}%+ gains. Try lowering threshold in settings.`);
+                      setError(`No stocks with ${topGainersThreshold}%+ gains${singularityGate > 0 ? ` and Singularity ≥ ${singularityGate}` : ''}. Try lowering threshold.`);
                       return;
                     }
                     runParabolicAnalysis(topGainers);
@@ -3143,12 +3141,17 @@ Respond with ONLY a JSON array:
                       .filter(s => matchesCategory(s, sectorFilter))
                       .filter(s => !filters.hideNetCashNegative || (s.netCash !== null && s.netCash >= 0))
                       .filter(s => (s.singularityScore || 0) >= filters.minSingularityScore)
+                      .filter(s => singularityGate === 0 || (s.singularityScore || 0) >= singularityGate)
                       .filter(s => !filters.excludeBanks || !s.isBank)
                       .filter(s => !filters.excludeFood || !s.isFood)
                       .filter(s => !filters.excludeHealthcare || !s.isHealthcare)
                       .filter(s => !filters.excludeInsurance || !s.isInsurance)
                       .filter(s => !filters.excludeREIT || !s.isREIT)
                       .sort((a, b) => b.compositeScore - a.compositeScore);
+                    if (singularityGate > 0 && currentView.length === 0) {
+                      setError(`No stocks with Singularity Score ≥ ${singularityGate}. Run Singularity scan first or lower the gate.`);
+                      return;
+                    }
                     runValuationAnalysis(currentView);
                   }} 
                   disabled={isScanning}
@@ -3159,7 +3162,7 @@ Respond with ONLY a JSON array:
                     color: '#38bdf8',
                     opacity: isScanning ? 0.5 : 1
                   }}
-                  title="Analyze if stock is under/overvalued based on future potential"
+                  title="Find depressed stocks with catalyst potential (coiled springs)"
                 >
                   {isAnalyzingValuation ? (
                     <><RefreshCw className="w-4 h-4 animate-spin" />Valuation {valuationProgress.current}/{valuationProgress.total}...</>
@@ -3566,6 +3569,45 @@ Respond with ONLY a JSON array:
                 </div>
               </div>
               
+              {/* Singularity Gate - minimum score for AI scans */}
+              <div className="mb-4 p-3 rounded-lg border" style={{ background: singularityGate > 0 ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.05)', borderColor: singularityGate > 0 ? 'rgba(245,158,11,0.4)' : 'rgba(245,158,11,0.2)' }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-amber-400" />
+                    <div>
+                      <span className="text-sm text-slate-200">Singularity Gate</span>
+                      <p className="text-xs text-slate-500">Only AI-scan stocks with singularity score ≥ this value</p>
+                      {singularityGate > 0 && (
+                        <p className="text-xs text-amber-400 mt-0.5">
+                          Active: {stocks.filter(s => (s.singularityScore || 0) >= singularityGate).length} of {stocks.length} stocks pass
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={singularityGate}
+                      onChange={e => setSingularityGate(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                      className="w-16 rounded-lg px-2 py-2 text-sm border outline-none text-center"
+                      style={{ background: 'rgba(30,41,59,0.5)', borderColor: singularityGate > 0 ? 'rgba(245,158,11,0.4)' : 'rgba(245,158,11,0.3)', color: singularityGate > 0 ? '#fbbf24' : '#94a3b8' }}
+                      min="0"
+                      max="100"
+                      placeholder="0"
+                    />
+                    {singularityGate > 0 && (
+                      <button
+                        onClick={() => setSingularityGate(0)}
+                        className="p-1.5 rounded hover:bg-slate-700/50 text-slate-500 hover:text-slate-300"
+                        title="Disable gate"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              
               {/* Market Cap Settings */}
               <div className="flex items-center justify-between p-3 rounded-lg border mb-3" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.2)' }}>
                 <div>
@@ -3830,102 +3872,6 @@ Respond with ONLY a JSON array:
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
-                  
-                  {/* Watchlist Dropdown */}
-                  <div className="relative">
-                    <button 
-                      onClick={() => setShowWatchlistMenu(!showWatchlistMenu)}
-                      className="px-3 py-2 rounded-lg text-sm border flex items-center gap-2"
-                      style={{ 
-                        background: activeWatchlist ? 'rgba(59,130,246,0.2)' : 'rgba(30,41,59,0.5)', 
-                        borderColor: activeWatchlist ? 'rgba(59,130,246,0.5)' : 'rgba(51,65,85,0.5)', 
-                        color: activeWatchlist ? '#60a5fa' : '#94a3b8' 
-                      }}
-                    >
-                      <Eye className="w-4 h-4" />
-                      {activeWatchlist ? watchlists.find(w => w.id === activeWatchlist)?.name || 'List' : 'Watchlists'}
-                    </button>
-                    
-                    {showWatchlistMenu && (
-                      <>
-                        <div className="fixed inset-0 z-40" onClick={() => setShowWatchlistMenu(false)} />
-                        <div className="absolute top-full mt-1 left-0 w-64 rounded-xl border shadow-xl z-50 overflow-hidden" style={{ background: '#1e293b', borderColor: 'rgba(51,65,85,0.5)' }}>
-                          <div className="p-2 border-b border-slate-700/50">
-                            <button 
-                              onClick={() => { setActiveWatchlist(null); setShowWatchlistMenu(false); }}
-                              className="w-full px-3 py-2 rounded-lg text-sm text-left hover:bg-slate-700/50 flex items-center gap-2"
-                              style={{ color: !activeWatchlist ? '#60a5fa' : '#94a3b8' }}
-                            >
-                              <Database className="w-4 h-4" />
-                              All Stocks
-                              {!activeWatchlist && <CheckCircle className="w-4 h-4 ml-auto text-blue-400" />}
-                            </button>
-                          </div>
-                          
-                          {watchlists.length > 0 && (
-                            <div className="p-2 border-b border-slate-700/50 max-h-48 overflow-y-auto">
-                              {watchlists.map(list => (
-                                <div key={list.id} className="flex items-center gap-2">
-                                  <button 
-                                    onClick={() => { setActiveWatchlist(list.id); setShowWatchlistMenu(false); }}
-                                    className="flex-1 px-3 py-2 rounded-lg text-sm text-left hover:bg-slate-700/50 flex items-center gap-2"
-                                    style={{ color: activeWatchlist === list.id ? '#60a5fa' : '#94a3b8' }}
-                                  >
-                                    <Eye className="w-4 h-4" />
-                                    {list.name}
-                                    <span className="text-xs text-slate-500">({list.tickers.length})</span>
-                                    {activeWatchlist === list.id && <CheckCircle className="w-4 h-4 ml-auto text-blue-400" />}
-                                  </button>
-                                  <button 
-                                    onClick={() => deleteWatchlist(list.id)}
-                                    className="p-1.5 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          
-                          <div className="p-2">
-                            {showCreateWatchlist ? (
-                              <div className="flex items-center gap-2">
-                                <input 
-                                  type="text" 
-                                  value={newWatchlistName}
-                                  onChange={e => setNewWatchlistName(e.target.value)}
-                                  onKeyDown={e => e.key === 'Enter' && createWatchlist(newWatchlistName)}
-                                  placeholder="List name..."
-                                  className="flex-1 px-3 py-2 rounded-lg text-sm border bg-slate-800/50 border-slate-600/50 outline-none text-slate-200"
-                                  autoFocus
-                                />
-                                <button 
-                                  onClick={() => createWatchlist(newWatchlistName)}
-                                  className="p-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-                                >
-                                  <CheckCircle className="w-4 h-4" />
-                                </button>
-                                <button 
-                                  onClick={() => { setShowCreateWatchlist(false); setNewWatchlistName(''); }}
-                                  className="p-2 rounded-lg hover:bg-slate-700/50 text-slate-400"
-                                >
-                                  <X className="w-4 h-4" />
-                                </button>
-                              </div>
-                            ) : (
-                              <button 
-                                onClick={() => setShowCreateWatchlist(true)}
-                                className="w-full px-3 py-2 rounded-lg text-sm text-left hover:bg-slate-700/50 flex items-center gap-2 text-blue-400"
-                              >
-                                <Plus className="w-4 h-4" />
-                                Create Watchlist
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
                   
                   {/* Top Gainers Toggle */}
                   <button 
@@ -4201,6 +4147,22 @@ Respond with ONLY a JSON array:
               )}
               
                 <div className="px-4 py-2 border-b border-slate-800/50 flex items-center gap-4 text-xs text-slate-500 font-medium" style={{ background: 'rgba(15,23,42,0.5)' }}>
+                  <div className="w-6 flex items-center justify-center">
+                    <input 
+                      type="checkbox"
+                      checked={sorted.length > 0 && sorted.every(s => selectedStocks.has(s.ticker))}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        if (e.target.checked) {
+                          setSelectedStocks(new Set(sorted.map(s => s.ticker)));
+                        } else {
+                          setSelectedStocks(new Set());
+                        }
+                      }}
+                      className="w-3.5 h-3.5 rounded cursor-pointer accent-indigo-500"
+                      title="Select all / Deselect all"
+                    />
+                  </div>
                   <div className="w-10 text-center">Rank</div>
                   <div className="flex-1">Ticker / Name</div>
                   <div className="w-24 text-right">Price / MCap</div>
@@ -4255,7 +4217,7 @@ Respond with ONLY a JSON array:
                   <div 
                     className="w-10 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy(sortBy === 'valuationScore' ? 'compositeScore' : 'valuationScore')}
-                    title="Valuation Score (50=fair, >50=undervalued, <50=overvalued)"
+                    title="Valuation: Depressed + Catalyst Potential (higher = more coiled spring)"
                   >
                     Vl
                     {sortBy === 'valuationScore' && <span className="text-sky-400">↓</span>}
@@ -4276,7 +4238,15 @@ Respond with ONLY a JSON array:
                     CH
                     {sortBy === 'cupHandleScore' && <span className="text-emerald-400">↓</span>}
                   </div>
-                  <div className="w-12 text-center">52wL</div>
+                  <div 
+                    className="w-12 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
+                    onClick={() => setSortBy(sortBy === 'fromLow' ? 'fromLowDesc' : 'fromLow')}
+                    title="Sort by % from 52-week low (click to toggle ascending/descending)"
+                  >
+                    52wL
+                    {sortBy === 'fromLow' && <span className="text-emerald-400">↑</span>}
+                    {sortBy === 'fromLowDesc' && <span className="text-emerald-400">↓</span>}
+                  </div>
                   <div 
                     className="w-14 text-center cursor-pointer hover:text-slate-300 transition-colors flex items-center justify-center gap-1"
                     onClick={() => setSortBy('compositeScore')}
@@ -4291,9 +4261,25 @@ Respond with ONLY a JSON array:
                 {sorted.length === 0 && !isScanning ? (
                   <div className="p-12 text-center"><Database className="w-12 h-12 text-slate-700 mx-auto mb-4" /><p className="text-slate-400">Click "Run Full Scan" to find small-cap opportunities</p></div>
                 ) : sorted.map((s, i) => (
-                  <div key={s.ticker} className="row cursor-pointer" onClick={() => setSelected(selected?.ticker === s.ticker ? null : s)}>
+                  <div key={s.ticker} className="row cursor-pointer" onClick={() => setSelected(selected?.ticker === s.ticker ? null : s)} style={{ background: selectedStocks.has(s.ticker) ? 'rgba(99,102,241,0.06)' : undefined }}>
                     <div className="p-4">
                       <div className="flex items-center gap-4">
+                        <div className="w-6 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                          <input 
+                            type="checkbox"
+                            checked={selectedStocks.has(s.ticker)}
+                            onChange={(e) => {
+                              const next = new Set(selectedStocks);
+                              if (e.target.checked) {
+                                next.add(s.ticker);
+                              } else {
+                                next.delete(s.ticker);
+                              }
+                              setSelectedStocks(next);
+                            }}
+                            className="w-3.5 h-3.5 rounded cursor-pointer accent-indigo-500"
+                          />
+                        </div>
                         <div className="w-10 h-10 rounded-xl flex items-center justify-center mono font-bold text-sm" style={{ background: i < 3 ? ['rgba(245,158,11,0.2)', 'rgba(148,163,184,0.2)', 'rgba(194,65,12,0.2)'][i] : 'rgba(30,41,59,0.5)', color: i < 3 ? ['#fbbf24', '#cbd5e1', '#fb923c'][i] : '#64748b' }}>#{i + 1}</div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
@@ -4304,40 +4290,43 @@ Respond with ONLY a JSON array:
                             {s.explosiveAnalysis && <Zap className="w-4 h-4 text-pink-400" title={`Explosive: ${s.explosiveScore}`} />}
                             {s.teamAnalysis && <Users className="w-4 h-4 text-purple-400" title={`Team: ${s.teamScore}`} />}
                             {s.parabolicAnalysis && <TrendingUp className="w-4 h-4 text-green-400" title={`Parabolic: ${s.parabolicScore}`} />}
-                            {s.valuationAnalysis && <DollarSign className="w-4 h-4 text-sky-400" title={`Valuation: ${s.valuationScore} (${s.valuationScore > 50 ? 'Undervalued' : s.valuationScore < 50 ? 'Overvalued' : 'Fair'})`} />}
+                            {s.valuationAnalysis && <DollarSign className="w-4 h-4 text-sky-400" title={`Valuation: ${s.valuationScore} (${s.valuationScore >= 80 ? 'Coiled Spring!' : s.valuationScore >= 66 ? 'Depressed' : s.valuationScore >= 50 ? 'Fair' : 'Priced In'})`} />}
                             {s.singularityScore >= 70 && <Flame className="w-4 h-4 text-amber-400" title={`Singularity: ${s.singularityScore}`} />}
-                            {/* Watchlist Quick Add */}
-                            {watchlists.length > 0 && (
-                              <div className="relative group">
+                            {/* Add to Session */}
+                            {sessions.length > 1 && (
+                              <div className="relative">
                                 <button 
-                                  onClick={(e) => { e.stopPropagation(); }}
-                                  className="p-1 rounded hover:bg-blue-500/20 text-slate-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  title="Add to watchlist"
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    setShowStockPicker(showStockPicker === s.ticker ? null : s.ticker);
+                                  }}
+                                  className="p-1 rounded hover:bg-blue-500/20 text-slate-500 hover:text-blue-400 transition-colors"
+                                  title="Add to another session"
                                 >
                                   <Plus className="w-3 h-3" />
                                 </button>
-                                <div className="absolute top-full left-0 mt-1 hidden group-hover:block z-50">
-                                  <div className="p-1 rounded-lg border shadow-xl" style={{ background: '#1e293b', borderColor: 'rgba(51,65,85,0.5)', minWidth: '120px' }}>
-                                    {watchlists.map(list => (
-                                      <button
-                                        key={list.id}
-                                        onClick={(e) => { 
-                                          e.stopPropagation(); 
-                                          if (isInWatchlist(list.id, s.ticker)) {
-                                            removeFromWatchlist(list.id, s.ticker);
-                                          } else {
-                                            addToWatchlist(list.id, s.ticker);
-                                          }
-                                        }}
-                                        className="w-full px-2 py-1 text-xs text-left rounded hover:bg-slate-700/50 flex items-center gap-2"
-                                        style={{ color: isInWatchlist(list.id, s.ticker) ? '#60a5fa' : '#94a3b8' }}
-                                      >
-                                        {isInWatchlist(list.id, s.ticker) ? <CheckCircle className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
-                                        {list.name}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
+                                {showStockPicker === s.ticker && (
+                                  <>
+                                    <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setShowStockPicker(null); }} />
+                                    <div className="absolute top-full left-0 mt-1 z-50 p-1 rounded-lg border shadow-xl" style={{ background: '#1e293b', borderColor: 'rgba(51,65,85,0.5)', minWidth: '160px' }}>
+                                      <p className="px-2 py-1 text-[10px] text-slate-500 uppercase">Add to session:</p>
+                                      {sessions.filter(sess => sess.id !== currentSessionId).map(sess => (
+                                        <button
+                                          key={sess.id}
+                                          onClick={(e) => { 
+                                            e.stopPropagation(); 
+                                            addStockToSession(s, sess.id);
+                                          }}
+                                          className="w-full px-2 py-1.5 text-xs text-left rounded hover:bg-slate-700/50 flex items-center gap-2 text-slate-300"
+                                        >
+                                          <Database className="w-3 h-3 text-slate-500" />
+                                          {sess.name}
+                                          <span className="text-slate-600 ml-auto">({sess.stocks?.length || 0})</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
@@ -4439,7 +4428,7 @@ Respond with ONLY a JSON array:
                                 background: s.valuationScore >= 70 ? 'rgba(14,165,233,0.3)' : s.valuationScore >= 50 ? 'rgba(14,165,233,0.2)' : s.valuationScore >= 30 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)',
                                 color: s.valuationScore >= 70 ? '#38bdf8' : s.valuationScore >= 50 ? '#7dd3fc' : s.valuationScore >= 30 ? '#fbbf24' : '#f87171'
                               }}
-                              title={s.valuationScore > 50 ? 'Undervalued' : s.valuationScore < 50 ? 'Overvalued' : 'Fair Value'}
+                              title={s.valuationScore >= 80 ? 'Coiled Spring!' : s.valuationScore >= 66 ? 'Depressed + Catalyst' : s.valuationScore >= 50 ? 'Fair' : 'Priced In / Overvalued'}
                             >
                               {s.valuationScore}
                             </span>
@@ -4521,6 +4510,42 @@ Respond with ONLY a JSON array:
                             </div>
                           )}
                           
+                          {s.explosiveAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(236,72,153,0.08)', borderColor: 'rgba(236,72,153,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-pink-400 mb-2 flex items-center gap-2">
+                                <Zap className="w-4 h-4" />
+                                Explosive Growth Potential
+                                {s.explosiveScore !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ 
+                                    background: s.explosiveScore >= 70 ? 'rgba(236,72,153,0.3)' : s.explosiveScore >= 50 ? 'rgba(236,72,153,0.2)' : 'rgba(100,116,139,0.2)', 
+                                    color: s.explosiveScore >= 70 ? '#f472b6' : s.explosiveScore >= 50 ? '#f9a8d4' : '#94a3b8' 
+                                  }}>
+                                    {s.explosiveScore}/100
+                                  </span>
+                                )}
+                              </h4>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.explosiveAnalysis}</p>
+                            </div>
+                          )}
+                          
+                          {s.teamAnalysis && (
+                            <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.3)' }}>
+                              <h4 className="text-sm font-semibold text-purple-400 mb-2 flex items-center gap-2">
+                                <Users className="w-4 h-4" />
+                                Team & Management Analysis
+                                {s.teamScore !== null && (
+                                  <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ 
+                                    background: s.teamScore >= 70 ? 'rgba(168,85,247,0.3)' : s.teamScore >= 50 ? 'rgba(168,85,247,0.2)' : 'rgba(100,116,139,0.2)', 
+                                    color: s.teamScore >= 70 ? '#c084fc' : s.teamScore >= 50 ? '#d8b4fe' : '#94a3b8' 
+                                  }}>
+                                    {s.teamScore}/100
+                                  </span>
+                                )}
+                              </h4>
+                              <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{s.teamAnalysis}</p>
+                            </div>
+                          )}
+                          
                           {s.technicalAnalysis && (
                             <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(99,102,241,0.08)', borderColor: 'rgba(99,102,241,0.3)' }}>
                               <h4 className="text-sm font-semibold text-indigo-400 mb-2 flex items-center gap-2">
@@ -4558,13 +4583,13 @@ Respond with ONLY a JSON array:
                             <div className="mb-4 p-4 rounded-xl border" style={{ background: 'rgba(14,165,233,0.08)', borderColor: 'rgba(14,165,233,0.3)' }}>
                               <h4 className="text-sm font-semibold text-sky-400 mb-2 flex items-center gap-2">
                                 <DollarSign className="w-4 h-4" />
-                                Valuation Analysis
+                                Valuation — Depressed / Coiled Spring Analysis
                                 {s.valuationScore !== null && (
                                   <span className="ml-2 px-2 py-0.5 rounded text-xs font-bold" style={{ 
                                     background: s.valuationScore >= 70 ? 'rgba(14,165,233,0.3)' : s.valuationScore >= 50 ? 'rgba(14,165,233,0.2)' : s.valuationScore >= 30 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)', 
                                     color: s.valuationScore >= 70 ? '#38bdf8' : s.valuationScore >= 50 ? '#7dd3fc' : s.valuationScore >= 30 ? '#fbbf24' : '#f87171' 
                                   }}>
-                                    {s.valuationScore >= 70 ? 'UNDERVALUED' : s.valuationScore >= 50 ? 'FAIR VALUE' : s.valuationScore >= 30 ? 'OVERVALUED' : 'VERY OVERVALUED'} ({s.valuationScore}/100)
+                                    {s.valuationScore >= 80 ? 'COILED SPRING 🔥' : s.valuationScore >= 66 ? 'UNDERVALUED' : s.valuationScore >= 50 ? 'FAIR VALUE' : s.valuationScore >= 35 ? 'PRICED IN' : 'OVERVALUED'} ({s.valuationScore}/100)
                                   </span>
                                 )}
                               </h4>
@@ -4622,6 +4647,94 @@ Respond with ONLY a JSON array:
             </div>
           </div>
         </div>
+        
+        {/* Floating Action Bar for Selected Stocks */}
+        {selectedStocks.size > 0 && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl border shadow-2xl flex items-center gap-3" style={{ background: 'rgba(15,23,42,0.97)', borderColor: 'rgba(99,102,241,0.4)', backdropFilter: 'blur(12px)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+            <span className="text-sm font-medium text-indigo-400 mr-1">{selectedStocks.size} selected</span>
+            <div className="w-px h-6 bg-slate-700" />
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runGrokAnalysis(sel);
+              }}
+              disabled={isAnalyzingAI}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(16,185,129,0.15)', borderColor: 'rgba(16,185,129,0.3)', color: '#34d399' }}
+            >
+              {isAnalyzingAI ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              Conviction
+            </button>
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runTechnicalAnalysis(sel);
+              }}
+              disabled={isAnalyzingTechnical}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(99,102,241,0.15)', borderColor: 'rgba(99,102,241,0.3)', color: '#a5b4fc' }}
+            >
+              {isAnalyzingTechnical ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+              C&H
+            </button>
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runExplosiveGrowthAnalysis(sel);
+              }}
+              disabled={isAnalyzingExplosive}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(236,72,153,0.15)', borderColor: 'rgba(236,72,153,0.3)', color: '#f472b6' }}
+            >
+              {isAnalyzingExplosive ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+              Explosive
+            </button>
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runTeamAnalysis(sel);
+              }}
+              disabled={isAnalyzingTeam}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(168,85,247,0.15)', borderColor: 'rgba(168,85,247,0.3)', color: '#c084fc' }}
+            >
+              {isAnalyzingTeam ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Users className="w-3 h-3" />}
+              Team
+            </button>
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runParabolicAnalysis(sel);
+              }}
+              disabled={isAnalyzingParabolic}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(34,197,94,0.15)', borderColor: 'rgba(34,197,94,0.3)', color: '#4ade80' }}
+            >
+              {isAnalyzingParabolic ? <RefreshCw className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
+              Parabolic
+            </button>
+            <button
+              onClick={() => {
+                const sel = stocks.filter(s => selectedStocks.has(s.ticker));
+                runValuationAnalysis(sel);
+              }}
+              disabled={isAnalyzingValuation}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 hover:brightness-125 transition-all"
+              style={{ background: 'rgba(14,165,233,0.15)', borderColor: 'rgba(14,165,233,0.3)', color: '#38bdf8' }}
+            >
+              {isAnalyzingValuation ? <RefreshCw className="w-3 h-3 animate-spin" /> : <DollarSign className="w-3 h-3" />}
+              Valuation
+            </button>
+            <div className="w-px h-6 bg-slate-700" />
+            <button
+              onClick={() => setSelectedStocks(new Set())}
+              className="p-1.5 rounded-lg hover:bg-slate-700/50 text-slate-500 hover:text-slate-300 transition-colors"
+              title="Clear selection"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         
         <footer className="mt-8 pb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
